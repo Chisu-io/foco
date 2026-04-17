@@ -1,0 +1,34 @@
+{
+  "name": "@chisu/agent",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Claude Agent SDK orchestration layer for Foco. Proprietary.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/chisu-io/foco.git",
+    "directory": "packages/agent"
+  },
+  "license": "SEE LICENSE IN ../../LICENSE-PROPRIETARY",
+  "author": "Chisu <hello@chisu.io>",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "dev": "tsc -p tsconfig.build.json --watch",
+    "test": "vitest run --coverage",
+    "test:watch": "vitest",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist .turbo coverage"
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  }
+}

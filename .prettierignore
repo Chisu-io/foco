@@ -1,0 +1,9 @@
+node_modules
+dist
+build
+.next
+.turbo
+coverage
+pnpm-lock.yaml
+.changeset
+LICENSE-APACHE-2.0

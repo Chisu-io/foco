@@ -1,0 +1,33 @@
+Foco Proprietary License
+Copyright (c) 2026 Chisu. All rights reserved.
+
+This license applies to the following components of this repository:
+
+  - packages/brand-engine/**
+  - packages/agent/**
+  - packages/publisher/**
+  - apps/web/**
+  - apps/worker/**
+  - Any other file or directory not explicitly licensed under LICENSE-APACHE-2.0.
+
+No part of the proprietary components may be reproduced, distributed, modified,
+sublicensed, or used to create derivative works in any form or by any means,
+without the prior written permission of Chisu, except as follows:
+
+  1. Reading the source code for the sole purpose of security auditing,
+     understanding interoperability with the Apache 2.0-licensed packages in
+     this repository, or reporting bugs and vulnerabilities to Chisu, is
+     permitted.
+
+  2. Contributions submitted via pull request are accepted under the terms of
+     the Contributor License Agreement (CLA), which grants Chisu a perpetual,
+     worldwide, royalty-free license to the contribution.
+
+Unauthorized commercial use, redistribution, or service offering based on these
+proprietary components is prohibited and will be enforced.
+
+The packages licensed under Apache License 2.0 (see LICENSE-APACHE-2.0) are
+explicitly excluded from these restrictions and may be used under the terms
+of that license independently of the proprietary components.
+
+For licensing inquiries: hello@chisu.io
