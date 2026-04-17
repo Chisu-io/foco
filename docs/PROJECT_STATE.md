@@ -2,6 +2,7 @@
 
 > **Purpose:** Single source of truth about "where we are" so any new conversation (human or AI) can get up to speed in under 2 minutes.
 > **Owner:** Jean (Chisu). **Updated:** 2026-04-17.
+> **Repo:** https://github.com/Chisu-io/foco
 
 ## What Foco is
 
@@ -68,8 +69,9 @@ Set in `memory/feedback_foco_quality.md`. Highlights:
 - [x] CI pipeline defined (Node 24, pnpm 10)
 - [x] Dual-license files in place
 - [x] `pnpm install` clean, `pnpm audit` 0 vulnerabilities
-- [x] `git init` done (pending: first commit + push)
-- [ ] First commit + GitHub repo `chisu-io/foco` public
+- [x] `git init` done
+- [x] First commit + pushed to `Chisu-io/foco` (public)
+- [ ] First CI run green
 - [ ] ESLint flat config
 - [ ] First module: port `_pipeline/` utilities → `@chisu/media-primitives`
 - [ ] `foco.chisu.io` DNS → Vercel landing

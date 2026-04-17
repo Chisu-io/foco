@@ -1,7 +1,13 @@
 {
   "$schema": "https://turbo.build/schema.json",
   "ui": "tui",
-  "globalDependencies": ["tsconfig.base.json", ".env", ".env.local"],
+  "globalDependencies": [
+    "tsconfig.base.json",
+    "eslint.config.js",
+    ".prettierrc.json",
+    ".env",
+    ".env.local"
+  ],
   "globalEnv": ["NODE_ENV", "CI"],
   "tasks": {
     "build": {

@@ -2,11 +2,12 @@
   "name": "foco",
   "version": "0.0.0",
   "private": true,
+  "type": "module",
   "description": "AI-powered short-form video production. Monorepo for Foco by Chisu.",
   "homepage": "https://foco.chisu.io",
   "repository": {
     "type": "git",
-    "url": "https://github.com/chisu-io/foco.git"
+    "url": "https://github.com/Chisu-io/foco.git"
   },
   "author": "Chisu <hello@chisu.io>",
   "license": "SEE LICENSE IN LICENSE-APACHE-2.0 AND LICENSE-PROPRIETARY",
@@ -32,19 +33,32 @@
   },
   "devDependencies": {
     "@changesets/cli": "^2.30.0",
+    "@eslint/js": "^9.28.0",
     "@types/node": "^24.0.0",
+    "eslint": "^9.28.0",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-import-resolver-typescript": "^4.4.0",
+    "eslint-plugin-import-x": "^4.15.0",
+    "globals": "^16.3.0",
     "husky": "^9.1.7",
     "lint-staged": "^16.4.0",
     "prettier": "^3.8.3",
     "turbo": "^2.9.6",
-    "typescript": "^6.0.3"
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.38.0"
   },
   "lint-staged": {
-    "*.{ts,tsx,js,jsx}": [
+    "*.{ts,tsx,js,jsx,mjs,cjs}": [
+      "eslint --fix",
       "prettier --write"
     ],
     "*.{json,md,yml,yaml}": [
       "prettier --write"
+    ]
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "unrs-resolver"
     ]
   }
 }
