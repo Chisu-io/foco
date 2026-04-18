@@ -62,6 +62,10 @@
     "onlyBuiltDependencies": [
       "esbuild",
       "unrs-resolver"
+    ],
+    "ignoredBuiltDependencies": [
+      "@revideo/telemetry",
+      "puppeteer"
     ]
   }
 }
