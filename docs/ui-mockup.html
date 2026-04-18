@@ -1,0 +1,2319 @@
+<!doctype html>
+<html lang="es" class="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Foco — MVP UI Mockup</title>
+<meta name="description" content="Mockup navegable del MVP de Foco para revisión antes de escribir código." />
+
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+tailwind.config = {
+  darkMode: 'class',
+  theme: {
+    extend: {
+      fontFamily: { sans: ['Inter', 'system-ui', 'sans-serif'] },
+      colors: {
+        brand: {
+          50:  '#f5f3ff',
+          100: '#ede9fe',
+          200: '#ddd6fe',
+          300: '#c4b5fd',
+          400: '#a78bfa',
+          500: '#8b5cf6',
+          600: '#7c3aed',
+          700: '#6d28d9',
+          800: '#5b21b6',
+          900: '#4c1d95',
+        },
+      },
+      fontSize: {
+        base: ['17px', '1.6'],
+        lg:   ['19px', '1.55'],
+        xl:   ['22px', '1.4'],
+        '2xl':['28px', '1.3'],
+        '3xl':['34px', '1.2'],
+        '4xl':['44px', '1.1'],
+      },
+    },
+  },
+};
+</script>
+<script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
+
+<style>
+  html, body { font-family: 'Inter', system-ui, sans-serif; }
+  body.dark { background: #0a0a0a; color: #e7e5e4; }
+  body:not(.dark) { background: #fafaf9; color: #18181b; }
+  :focus-visible { outline: 3px solid #a78bfa; outline-offset: 2px; border-radius: 6px; }
+  button, a, [role="button"] { min-height: 48px; }
+  .screen { display: none; }
+  .screen.active { display: block; }
+  .muted { color: rgb(168 162 158); }
+  .dark .muted { color: rgb(168 162 158); }
+  .card {
+    background: rgb(23 23 23);
+    border: 1px solid rgb(38 38 38);
+    border-radius: 16px;
+  }
+  body:not(.dark) .card {
+    background: #ffffff;
+    border: 1px solid rgb(228 228 231);
+  }
+  .chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 4px 10px; border-radius: 999px;
+    font-size: 13px; font-weight: 500;
+    background: rgb(38 38 38); color: rgb(212 212 216);
+    min-height: 0;
+  }
+  body:not(.dark) .chip { background: rgb(244 244 245); color: rgb(63 63 70); }
+  .chip-brand { background: rgba(139, 92, 246, .15); color: #c4b5fd; }
+  body:not(.dark) .chip-brand { background: rgb(237 233 254); color: rgb(91 33 182); }
+  .btn-primary {
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+    padding: 12px 20px; border-radius: 12px; font-weight: 600;
+    background: #7c3aed; color: white; border: none; cursor: pointer;
+    transition: transform .08s, background .15s;
+  }
+  .btn-primary:hover { background: #6d28d9; }
+  .btn-primary:active { transform: scale(.98); }
+  .btn-secondary {
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+    padding: 12px 20px; border-radius: 12px; font-weight: 600;
+    background: transparent; color: inherit; border: 1px solid rgb(63 63 70); cursor: pointer;
+  }
+  body:not(.dark) .btn-secondary { border-color: rgb(212 212 216); }
+  .btn-ghost {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 10px 12px; border-radius: 10px; font-weight: 500;
+    background: transparent; border: none; cursor: pointer; color: inherit;
+  }
+  .btn-ghost:hover { background: rgb(38 38 38); }
+  body:not(.dark) .btn-ghost:hover { background: rgb(244 244 245); }
+  .sidebar-item {
+    display: flex; align-items: center; gap: 14px;
+    padding: 12px 14px; border-radius: 12px; cursor: pointer;
+    color: rgb(212 212 216); font-weight: 500;
+  }
+  body:not(.dark) .sidebar-item { color: rgb(63 63 70); }
+  .sidebar-item:hover { background: rgb(28 28 28); }
+  body:not(.dark) .sidebar-item:hover { background: rgb(245 245 244); }
+  .sidebar-item.active { background: rgba(139, 92, 246, .18); color: #ddd6fe; }
+  body:not(.dark) .sidebar-item.active { background: rgb(237 233 254); color: rgb(91 33 182); }
+  .input {
+    width: 100%; padding: 14px 16px; border-radius: 12px;
+    background: rgb(23 23 23); border: 1px solid rgb(63 63 70); color: inherit;
+    font-size: 17px; font-family: inherit;
+    min-height: 52px;
+  }
+  body:not(.dark) .input { background: #fff; border-color: rgb(212 212 216); }
+  .input:focus { border-color: #a78bfa; }
+  textarea.input { min-height: 120px; line-height: 1.55; }
+  label.field-label { display: block; font-weight: 600; margin-bottom: 8px; font-size: 15px; }
+  .progress-dot {
+    width: 32px; height: 32px; border-radius: 999px;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-weight: 700; font-size: 14px;
+    background: rgb(38 38 38); color: rgb(168 162 158);
+  }
+  body:not(.dark) .progress-dot { background: rgb(244 244 245); color: rgb(113 113 122); }
+  .progress-dot.done { background: #16a34a; color: white; }
+  .progress-dot.current { background: #7c3aed; color: white; box-shadow: 0 0 0 4px rgba(124, 58, 237, .18); }
+  .aspect-pill {
+    display: inline-flex; flex-direction: column; align-items: center; gap: 6px;
+    padding: 14px 10px; border-radius: 14px; cursor: pointer;
+    border: 1.5px solid rgb(63 63 70); color: rgb(212 212 216);
+    min-width: 92px; min-height: 110px; background: transparent;
+    transition: border-color .15s, background .15s;
+  }
+  body:not(.dark) .aspect-pill { border-color: rgb(228 228 231); color: rgb(63 63 70); }
+  .aspect-pill:hover { border-color: #a78bfa; }
+  .aspect-pill.selected { border-color: #7c3aed; background: rgba(124, 58, 237, .12); color: #ddd6fe; }
+  body:not(.dark) .aspect-pill.selected { background: rgb(237 233 254); color: rgb(91 33 182); }
+  .aspect-box { border: 2px solid currentColor; border-radius: 4px; }
+  .aspect-9x16 { width: 22px; height: 40px; }
+  .aspect-1x1  { width: 36px; height: 36px; }
+  .aspect-16x9 { width: 48px; height: 27px; }
+  .aspect-4x5  { width: 28px; height: 35px; }
+  .caption-word {
+    display: inline-block; padding: 2px 6px; border-radius: 6px;
+    margin: 0 2px; cursor: pointer; font-weight: 600;
+  }
+  .caption-word.active { background: #facc15; color: #000; transform: scale(1.08); transition: transform .15s; }
+  .caption-word:hover { outline: 2px dashed #a78bfa; }
+  .timeline-track {
+    height: 56px; border-radius: 10px;
+    background: repeating-linear-gradient(90deg, rgba(255,255,255,.04) 0 1px, transparent 1px 24px);
+    border: 1px solid rgb(38 38 38);
+    position: relative;
+  }
+  body:not(.dark) .timeline-track {
+    background: repeating-linear-gradient(90deg, rgba(0,0,0,.04) 0 1px, transparent 1px 24px);
+    border-color: rgb(228 228 231);
+  }
+  .timeline-clip {
+    position: absolute; top: 6px; bottom: 6px;
+    border-radius: 8px; padding: 4px 8px;
+    font-size: 12px; font-weight: 600; color: white;
+    display: flex; align-items: center; gap: 6px;
+    overflow: hidden; white-space: nowrap;
+  }
+  .playhead {
+    position: absolute; top: -6px; bottom: -6px; width: 2px;
+    background: #ef4444; z-index: 5;
+  }
+  .playhead::after {
+    content: ''; position: absolute; top: -4px; left: -5px;
+    width: 12px; height: 12px; background: #ef4444; border-radius: 999px;
+  }
+  .platform-btn {
+    display: flex; align-items: center; gap: 12px;
+    padding: 16px 18px; border-radius: 14px;
+    border: 1.5px solid rgb(63 63 70); background: transparent;
+    cursor: pointer; font-weight: 600; color: inherit; width: 100%;
+    text-align: left;
+  }
+  body:not(.dark) .platform-btn { border-color: rgb(228 228 231); }
+  .platform-btn.connected { border-color: #16a34a; background: rgba(22, 163, 74, .08); }
+  .platform-btn.selected  { border-color: #7c3aed; background: rgba(124, 58, 237, .12); }
+  .kbd {
+    display: inline-block; padding: 2px 8px; font-size: 12px; font-weight: 600;
+    border-radius: 6px; background: rgb(38 38 38); color: rgb(212 212 216);
+    border: 1px solid rgb(63 63 70);
+    min-height: 0;
+  }
+  body:not(.dark) .kbd { background: rgb(244 244 245); color: rgb(63 63 70); border-color: rgb(228 228 231); }
+  .divider { height: 1px; background: rgb(38 38 38); margin: 24px 0; }
+  body:not(.dark) .divider { background: rgb(228 228 231); }
+  .nav-drawer {
+    position: fixed; right: 24px; bottom: 24px; z-index: 50;
+    background: rgb(23 23 23); border: 1px solid rgb(63 63 70);
+    border-radius: 16px; padding: 10px;
+    display: flex; flex-direction: column; gap: 4px;
+    max-height: 520px; overflow-y: auto; min-width: 280px;
+    box-shadow: 0 20px 40px rgba(0,0,0,.4);
+  }
+  body:not(.dark) .nav-drawer { background: #fff; border-color: rgb(228 228 231); box-shadow: 0 20px 40px rgba(0,0,0,.12); }
+  .nav-drawer.collapsed .nav-items { display: none; }
+  .nav-item {
+    display: flex; align-items: center; gap: 10px; padding: 10px 12px;
+    border-radius: 10px; cursor: pointer; font-size: 14px; font-weight: 500;
+    min-height: 40px;
+  }
+  .nav-item:hover { background: rgb(38 38 38); }
+  body:not(.dark) .nav-item:hover { background: rgb(244 244 245); }
+  .nav-item.active { background: rgba(124, 58, 237, .2); color: #ddd6fe; }
+  body:not(.dark) .nav-item.active { background: rgb(237 233 254); color: rgb(91 33 182); }
+  .avatar-photo {
+    width: 72px; height: 72px; border-radius: 999px;
+    background: linear-gradient(135deg, #8b5cf6, #ec4899);
+    display: flex; align-items: center; justify-content: center;
+    color: white; font-weight: 700; font-size: 26px;
+  }
+  .preview-canvas-9x16 {
+    aspect-ratio: 9 / 16; max-height: 520px;
+    background: linear-gradient(180deg, #4c1d95 0%, #1e293b 100%);
+    border-radius: 16px; position: relative; overflow: hidden;
+    margin: 0 auto;
+  }
+  .preview-face-overlay {
+    position: absolute; bottom: 12px; right: 12px; width: 70px; height: 70px;
+    border-radius: 999px; border: 3px solid #fff; overflow: hidden;
+    background: linear-gradient(135deg, #fb923c, #ef4444);
+  }
+  .platform-dot { width: 12px; height: 12px; border-radius: 999px; display: inline-block; }
+</style>
+</head>
+
+<body class="dark">
+
+<!-- ======================================================================
+     NAV DRAWER — selector de pantalla para revisar el mockup
+====================================================================== -->
+<aside id="navDrawer" class="nav-drawer" aria-label="Mockup navigator">
+  <header class="flex items-center justify-between px-2 pb-2 border-b border-neutral-800">
+    <div class="flex items-center gap-2">
+      <span class="inline-block w-2 h-2 rounded-full bg-brand-500"></span>
+      <strong class="text-sm">Foco · MVP mockup</strong>
+    </div>
+    <div class="flex gap-1">
+      <button class="btn-ghost" id="themeToggle" title="Cambiar tema" aria-label="Cambiar tema" style="min-height:36px;padding:6px 8px">
+        <i data-lucide="sun-moon" class="w-4 h-4"></i>
+      </button>
+      <button class="btn-ghost" id="drawerToggle" title="Contraer" aria-label="Contraer" style="min-height:36px;padding:6px 8px">
+        <i data-lucide="chevron-down" class="w-4 h-4"></i>
+      </button>
+    </div>
+  </header>
+  <div class="nav-items mt-2" id="navItems">
+    <!-- injected by JS -->
+  </div>
+</aside>
+
+<!-- ======================================================================
+     SHELL (sidebar + topbar) — usado por pantallas que NO son onboarding
+====================================================================== -->
+<template id="shellTemplate">
+  <div class="min-h-screen flex">
+    <!-- Sidebar -->
+    <nav class="w-[232px] shrink-0 border-r border-neutral-800 p-4 flex flex-col gap-2" aria-label="Navegación principal">
+      <div class="flex items-center gap-3 px-2 py-3 mb-2">
+        <div class="w-10 h-10 rounded-xl bg-brand-600 flex items-center justify-center text-white font-extrabold text-xl">F</div>
+        <div>
+          <div class="font-bold text-lg leading-tight">Foco</div>
+          <div class="muted text-xs">by Chisu</div>
+        </div>
+      </div>
+
+      <a class="sidebar-item" data-nav-to="dashboard"><i data-lucide="layout-dashboard" class="w-5 h-5"></i><span>Inicio</span></a>
+      <a class="sidebar-item" data-nav-to="create-1"><i data-lucide="wand-sparkles" class="w-5 h-5"></i><span>Crear video</span></a>
+      <a class="sidebar-item" data-nav-to="library"><i data-lucide="library" class="w-5 h-5"></i><span>Biblioteca</span></a>
+      <a class="sidebar-item" data-nav-to="memory"><i data-lucide="brain" class="w-5 h-5"></i><span>Memoria</span></a>
+
+      <div class="muted text-xs font-semibold uppercase tracking-wider mt-6 mb-1 px-2">Ajustes</div>
+      <a class="sidebar-item" data-nav-to="settings-brand"><i data-lucide="palette" class="w-5 h-5"></i><span>Marca</span></a>
+      <a class="sidebar-item" data-nav-to="settings-integrations"><i data-lucide="plug" class="w-5 h-5"></i><span>Claves e integraciones</span></a>
+      <a class="sidebar-item" data-nav-to="settings-mcp"><i data-lucide="network" class="w-5 h-5"></i><span>MCP Gateway</span></a>
+      <a class="sidebar-item" data-nav-to="settings-billing"><i data-lucide="credit-card" class="w-5 h-5"></i><span>Plan y facturación</span></a>
+      <a class="sidebar-item" data-nav-to="help"><i data-lucide="life-buoy" class="w-5 h-5"></i><span>Ayuda y soporte</span></a>
+
+      <div class="mt-auto pt-6">
+        <div class="card p-3 mt-3 flex items-center gap-3">
+          <div class="avatar-photo" style="width:44px;height:44px;font-size:16px">JR</div>
+          <div class="min-w-0">
+            <div class="font-semibold truncate text-sm">Jean Rojas</div>
+            <div class="muted text-xs truncate">Plan Starter · BYOK</div>
+          </div>
+        </div>
+      </div>
+    </nav>
+
+    <!-- Main -->
+    <main class="flex-1 min-w-0">
+      <header class="h-16 border-b border-neutral-800 flex items-center justify-between px-6">
+        <div class="flex items-center gap-3">
+          <button class="btn-ghost" aria-label="Buscar"><i data-lucide="search" class="w-5 h-5"></i><span class="text-sm muted">Buscar o ejecutar un comando</span><span class="kbd ml-3">⌘K</span></button>
+        </div>
+        <div class="flex items-center gap-2">
+          <button class="btn-ghost" aria-label="Notificaciones"><i data-lucide="bell" class="w-5 h-5"></i></button>
+          <button class="btn-primary" data-nav-to="create-1"><i data-lucide="plus" class="w-4 h-4"></i>Crear video</button>
+        </div>
+      </header>
+      <div class="p-8 max-w-6xl mx-auto" data-slot></div>
+    </main>
+  </div>
+</template>
+
+<!-- ======================================================================
+     SCREEN 1 — ONBOARDING
+====================================================================== -->
+<section class="screen" data-screen="onboarding">
+  <div class="min-h-screen flex items-center justify-center p-6">
+    <div class="w-full max-w-3xl">
+      <!-- Progress -->
+      <div class="flex items-center justify-center gap-4 mb-10">
+        <span class="progress-dot current">1</span>
+        <span class="h-px w-12 bg-neutral-700"></span>
+        <span class="progress-dot">2</span>
+        <span class="h-px w-12 bg-neutral-700"></span>
+        <span class="progress-dot">3</span>
+      </div>
+
+      <div class="card p-10 md:p-14 text-center">
+        <div class="inline-flex items-center justify-center w-20 h-20 rounded-2xl bg-brand-600 mb-6">
+          <i data-lucide="sparkles" class="w-10 h-10 text-white"></i>
+        </div>
+        <h1 class="text-3xl md:text-4xl font-bold mb-4">Bienvenido a Foco, Jean</h1>
+        <p class="text-lg muted max-w-xl mx-auto mb-8">
+          Vamos a crear tu primer video en menos de 5 minutos. Sólo necesitamos tres cosas: tu nombre, algunas fotos tuyas para tu avatar AI, y conectar las redes donde publicarás.
+        </p>
+
+        <div class="flex flex-col md:flex-row gap-4 max-w-md mx-auto mb-8 text-left">
+          <div class="flex-1">
+            <label class="field-label" for="first-name">¿Cómo te llamas?</label>
+            <input id="first-name" class="input" value="Jean" />
+          </div>
+          <div class="flex-1">
+            <label class="field-label" for="handle">Usuario Foco</label>
+            <input id="handle" class="input" value="jean" />
+          </div>
+        </div>
+
+        <div class="flex justify-center gap-3">
+          <button class="btn-primary" data-nav-to="onboarding-2">Siguiente: subir fotos<i data-lucide="arrow-right" class="w-4 h-4"></i></button>
+        </div>
+        <p class="mt-6 muted text-sm">Puedes saltar pasos y completarlos después.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- SCREEN 1b — onboarding upload photos -->
+<section class="screen" data-screen="onboarding-2">
+  <div class="min-h-screen flex items-center justify-center p-6">
+    <div class="w-full max-w-3xl">
+      <div class="flex items-center justify-center gap-4 mb-10">
+        <span class="progress-dot done"><i data-lucide="check" class="w-4 h-4"></i></span>
+        <span class="h-px w-12 bg-neutral-700"></span>
+        <span class="progress-dot current">2</span>
+        <span class="h-px w-12 bg-neutral-700"></span>
+        <span class="progress-dot">3</span>
+      </div>
+
+      <div class="card p-10 md:p-14">
+        <h1 class="text-3xl font-bold mb-3 text-center">Sube 5 a 10 fotos tuyas</h1>
+        <p class="text-lg muted text-center max-w-xl mx-auto mb-8">
+          Con estas fotos entrenamos tu avatar AI. Úsalas con buena luz, distintos ángulos y sin lentes oscuros. Tardamos 3-5 minutos en procesarlas.
+        </p>
+
+        <div class="grid grid-cols-5 gap-3 mb-6">
+          <div class="aspect-square rounded-xl bg-gradient-to-br from-brand-400 to-pink-500 flex items-center justify-center text-white text-3xl font-bold">JR</div>
+          <div class="aspect-square rounded-xl bg-gradient-to-br from-amber-400 to-rose-500 flex items-center justify-center text-white text-3xl font-bold">JR</div>
+          <div class="aspect-square rounded-xl bg-gradient-to-br from-teal-400 to-sky-500 flex items-center justify-center text-white text-3xl font-bold">JR</div>
+          <div class="aspect-square rounded-xl bg-gradient-to-br from-fuchsia-400 to-indigo-500 flex items-center justify-center text-white text-3xl font-bold">JR</div>
+          <div class="aspect-square rounded-xl border-2 border-dashed border-neutral-700 flex flex-col items-center justify-center muted cursor-pointer hover:border-brand-500">
+            <i data-lucide="plus" class="w-8 h-8 mb-1"></i>
+            <span class="text-xs font-semibold">Añadir</span>
+          </div>
+        </div>
+
+        <div class="rounded-xl bg-brand-900/30 border border-brand-800 p-4 flex gap-3 mb-6">
+          <i data-lucide="shield-check" class="w-5 h-5 text-brand-300 shrink-0 mt-0.5"></i>
+          <div class="text-sm">
+            <strong class="block mb-1">Tus fotos son privadas</strong>
+            <span class="muted">Nunca las usamos para entrenar modelos de terceros y puedes borrarlas en cualquier momento desde Ajustes → Marca.</span>
+          </div>
+        </div>
+
+        <div class="flex justify-between">
+          <button class="btn-secondary" data-nav-to="onboarding"><i data-lucide="arrow-left" class="w-4 h-4"></i>Atrás</button>
+          <div class="flex gap-3">
+            <button class="btn-ghost" data-nav-to="onboarding-3">Saltar por ahora</button>
+            <button class="btn-primary" data-nav-to="onboarding-3">Siguiente<i data-lucide="arrow-right" class="w-4 h-4"></i></button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- SCREEN 1c — connect social -->
+<section class="screen" data-screen="onboarding-3">
+  <div class="min-h-screen flex items-center justify-center p-6">
+    <div class="w-full max-w-3xl">
+      <div class="flex items-center justify-center gap-4 mb-10">
+        <span class="progress-dot done"><i data-lucide="check" class="w-4 h-4"></i></span>
+        <span class="h-px w-12 bg-neutral-700"></span>
+        <span class="progress-dot done"><i data-lucide="check" class="w-4 h-4"></i></span>
+        <span class="h-px w-12 bg-neutral-700"></span>
+        <span class="progress-dot current">3</span>
+      </div>
+
+      <div class="card p-10 md:p-14">
+        <h1 class="text-3xl font-bold mb-3 text-center">Conecta dónde publicarás</h1>
+        <p class="text-lg muted text-center max-w-xl mx-auto mb-8">
+          Conéctate a las redes que te interesen. Foco publicará directamente en tu nombre sin terceros.
+        </p>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mb-6">
+          <button class="platform-btn connected">
+            <span class="platform-dot" style="background:#000"></span>
+            <span class="flex-1">TikTok</span>
+            <span class="chip" style="background:rgba(22,163,74,.15);color:#86efac"><i data-lucide="check" class="w-3 h-3"></i>Conectado</span>
+          </button>
+          <button class="platform-btn">
+            <span class="platform-dot" style="background:linear-gradient(45deg,#f58529,#dd2a7b,#8134af)"></span>
+            <span class="flex-1">Instagram</span>
+            <span class="chip">Conectar</span>
+          </button>
+          <button class="platform-btn">
+            <span class="platform-dot" style="background:#1877f2"></span>
+            <span class="flex-1">Facebook</span>
+            <span class="chip">Conectar</span>
+          </button>
+          <button class="platform-btn">
+            <span class="platform-dot" style="background:#ff0033"></span>
+            <span class="flex-1">YouTube</span>
+            <span class="chip">Conectar</span>
+          </button>
+          <button class="platform-btn">
+            <span class="platform-dot" style="background:#0a66c2"></span>
+            <span class="flex-1">LinkedIn</span>
+            <span class="chip">Conectar</span>
+          </button>
+          <button class="platform-btn">
+            <span class="platform-dot" style="background:#000"></span>
+            <span class="flex-1">X (Twitter)</span>
+            <span class="chip">Conectar</span>
+          </button>
+        </div>
+
+        <div class="flex justify-between">
+          <button class="btn-secondary" data-nav-to="onboarding-2"><i data-lucide="arrow-left" class="w-4 h-4"></i>Atrás</button>
+          <div class="flex gap-3">
+            <button class="btn-ghost" data-nav-to="dashboard">Saltar, voy al inicio</button>
+            <button class="btn-primary" data-nav-to="dashboard">Entrar a Foco<i data-lucide="arrow-right" class="w-4 h-4"></i></button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ======================================================================
+     SCREEN 2 — DASHBOARD
+====================================================================== -->
+<section class="screen" data-screen="dashboard" data-use-shell>
+  <div>
+    <h1 class="text-3xl font-bold mb-2">Buenos días, Jean</h1>
+    <p class="text-lg muted mb-8">Tienes 3 videos listos para publicar y un borrador pendiente.</p>
+
+    <!-- Big CTA card -->
+    <div class="card p-8 mb-8 bg-gradient-to-br from-brand-900/60 to-neutral-900">
+      <div class="flex items-center gap-6">
+        <div class="w-16 h-16 rounded-2xl bg-brand-600 flex items-center justify-center shrink-0">
+          <i data-lucide="wand-sparkles" class="w-8 h-8 text-white"></i>
+        </div>
+        <div class="flex-1">
+          <h2 class="text-2xl font-bold mb-1">Crea tu próximo video</h2>
+          <p class="muted">Cuéntale a Foco el tema y él escribe, graba, edita y publica por ti.</p>
+        </div>
+        <button class="btn-primary" data-nav-to="create-1">Empezar<i data-lucide="arrow-right" class="w-4 h-4"></i></button>
+      </div>
+    </div>
+
+    <!-- Metrics -->
+    <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+      <div class="card p-5">
+        <div class="flex items-center justify-between mb-2">
+          <span class="muted text-sm">Videos este mes</span>
+          <i data-lucide="video" class="w-5 h-5 muted"></i>
+        </div>
+        <div class="text-3xl font-bold">12</div>
+        <div class="text-sm mt-1" style="color:#4ade80">+4 vs mes pasado</div>
+      </div>
+      <div class="card p-5">
+        <div class="flex items-center justify-between mb-2">
+          <span class="muted text-sm">Visualizaciones</span>
+          <i data-lucide="eye" class="w-5 h-5 muted"></i>
+        </div>
+        <div class="text-3xl font-bold">48.3k</div>
+        <div class="text-sm mt-1" style="color:#4ade80">+23% esta semana</div>
+      </div>
+      <div class="card p-5">
+        <div class="flex items-center justify-between mb-2">
+          <span class="muted text-sm">Engagement</span>
+          <i data-lucide="heart" class="w-5 h-5 muted"></i>
+        </div>
+        <div class="text-3xl font-bold">6.2%</div>
+        <div class="text-sm mt-1 muted">Top 10% de tu nicho</div>
+      </div>
+      <div class="card p-5">
+        <div class="flex items-center justify-between mb-2">
+          <span class="muted text-sm">Créditos restantes</span>
+          <i data-lucide="coins" class="w-5 h-5 muted"></i>
+        </div>
+        <div class="text-3xl font-bold">47 / 100</div>
+        <div class="text-sm mt-1 muted">Renueva en 12 días</div>
+      </div>
+    </div>
+
+    <!-- Recent -->
+    <div class="flex items-center justify-between mb-4">
+      <h3 class="text-xl font-bold">Recientes</h3>
+      <button class="btn-ghost" data-nav-to="library">Ver biblioteca<i data-lucide="arrow-right" class="w-4 h-4"></i></button>
+    </div>
+
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div class="card p-3">
+        <div class="aspect-video rounded-lg bg-gradient-to-br from-indigo-500 to-purple-700 flex items-center justify-center mb-3 relative">
+          <i data-lucide="play" class="w-10 h-10 text-white"></i>
+          <span class="absolute top-2 right-2 chip chip-brand">9:16</span>
+        </div>
+        <div class="font-semibold">Por qué los SaaS OSS ganan</div>
+        <div class="flex items-center gap-2 muted text-sm mt-1">
+          <span class="platform-dot" style="background:#000"></span>TikTok · 12.4k vistas
+        </div>
+      </div>
+      <div class="card p-3">
+        <div class="aspect-video rounded-lg bg-gradient-to-br from-emerald-500 to-teal-700 flex items-center justify-center mb-3 relative">
+          <i data-lucide="play" class="w-10 h-10 text-white"></i>
+          <span class="absolute top-2 right-2 chip chip-brand">1:1</span>
+        </div>
+        <div class="font-semibold">Construyendo Foco en público — día 3</div>
+        <div class="flex items-center gap-2 muted text-sm mt-1">
+          <span class="platform-dot" style="background:#0a66c2"></span>LinkedIn · 3.1k vistas
+        </div>
+      </div>
+      <div class="card p-3">
+        <div class="aspect-video rounded-lg bg-gradient-to-br from-amber-500 to-rose-600 flex items-center justify-center mb-3 relative">
+          <span class="absolute top-2 left-2 chip" style="background:rgba(124,58,237,.3);color:#ddd6fe"><i data-lucide="circle-dot" class="w-3 h-3"></i>Borrador</span>
+          <span class="absolute top-2 right-2 chip chip-brand">9:16</span>
+        </div>
+        <div class="font-semibold">WhisperX para captions word-level</div>
+        <div class="flex items-center gap-2 muted text-sm mt-1">
+          <i data-lucide="pencil" class="w-3 h-3"></i>Pausado en "script"
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ======================================================================
+     SCREEN 3 — CREATE STEP 1 — tema/prompt
+====================================================================== -->
+<section class="screen" data-screen="create-1" data-use-shell>
+  <div class="max-w-3xl mx-auto">
+    <div class="flex items-center gap-4 mb-8">
+      <span class="progress-dot current">1</span>
+      <span class="flex-1 h-px bg-neutral-800"></span>
+      <span class="progress-dot">2</span>
+      <span class="flex-1 h-px bg-neutral-800"></span>
+      <span class="progress-dot">3</span>
+      <span class="flex-1 h-px bg-neutral-800"></span>
+      <span class="progress-dot">4</span>
+    </div>
+
+    <h1 class="text-3xl font-bold mb-3">¿De qué hablamos hoy?</h1>
+    <p class="text-lg muted mb-8">Escríbelo en tus palabras. Puede ser una idea, un enlace a un artículo, o un bullet point. Foco lo convierte en guion.</p>
+
+    <label class="field-label" for="topic">Tema o idea</label>
+    <textarea id="topic" class="input mb-6" placeholder="Ej: Explica por qué BYOK es el futuro de los SaaS de AI y por qué pagamos por &quot;managed&quot; convenience más que por modelos.">Explica por qué BYOK (bring your own key) es el futuro de los SaaS de AI y cómo cambia la relación con el usuario.</textarea>
+
+    <div class="divider"></div>
+
+    <div class="grid md:grid-cols-2 gap-4 mb-6">
+      <div>
+        <label class="field-label">Formato</label>
+        <div class="flex gap-2 flex-wrap">
+          <button class="aspect-pill selected"><span class="aspect-box aspect-9x16"></span><span class="text-sm font-semibold">Vertical</span><span class="text-xs muted">TikTok, Reels, Shorts</span></button>
+          <button class="aspect-pill"><span class="aspect-box aspect-1x1"></span><span class="text-sm font-semibold">Cuadrado</span><span class="text-xs muted">Instagram, LinkedIn</span></button>
+          <button class="aspect-pill"><span class="aspect-box aspect-16x9"></span><span class="text-sm font-semibold">Horizontal</span><span class="text-xs muted">YouTube, X</span></button>
+        </div>
+      </div>
+      <div>
+        <label class="field-label">Duración</label>
+        <div class="flex gap-2 flex-wrap">
+          <button class="aspect-pill" style="min-height:72px;padding:10px 14px"><span class="text-lg font-bold">30s</span><span class="text-xs muted">Gancho corto</span></button>
+          <button class="aspect-pill selected" style="min-height:72px;padding:10px 14px"><span class="text-lg font-bold">60s</span><span class="text-xs muted">Sweet spot</span></button>
+          <button class="aspect-pill" style="min-height:72px;padding:10px 14px"><span class="text-lg font-bold">90s</span><span class="text-xs muted">Detallado</span></button>
+        </div>
+      </div>
+    </div>
+
+    <details class="card p-4 mb-6">
+      <summary class="cursor-pointer font-semibold flex items-center gap-2"><i data-lucide="sliders" class="w-4 h-4"></i>Más opciones</summary>
+      <div class="mt-4 grid md:grid-cols-2 gap-4">
+        <div>
+          <label class="field-label">Tono</label>
+          <select class="input">
+            <option>Autoritario y técnico</option>
+            <option>Cercano y conversacional</option>
+            <option>Enérgico y viral</option>
+          </select>
+        </div>
+        <div>
+          <label class="field-label">Idioma</label>
+          <select class="input">
+            <option>Español (Colombia)</option>
+            <option>Español (neutral)</option>
+            <option>English (US)</option>
+          </select>
+        </div>
+      </div>
+    </details>
+
+    <div class="flex justify-between">
+      <button class="btn-secondary" data-nav-to="dashboard"><i data-lucide="arrow-left" class="w-4 h-4"></i>Cancelar</button>
+      <button class="btn-primary" data-nav-to="create-2">Escribir guion<i data-lucide="wand-sparkles" class="w-4 h-4"></i></button>
+    </div>
+  </div>
+</section>
+
+<!-- ======================================================================
+     SCREEN 4 — CREATE STEP 2 — guion + voz
+====================================================================== -->
+<section class="screen" data-screen="create-2" data-use-shell>
+  <div class="max-w-5xl mx-auto">
+    <div class="flex items-center gap-4 mb-8">
+      <span class="progress-dot done"><i data-lucide="check" class="w-4 h-4"></i></span>
+      <span class="flex-1 h-px bg-neutral-800"></span>
+      <span class="progress-dot current">2</span>
+      <span class="flex-1 h-px bg-neutral-800"></span>
+      <span class="progress-dot">3</span>
+      <span class="flex-1 h-px bg-neutral-800"></span>
+      <span class="progress-dot">4</span>
+    </div>
+
+    <h1 class="text-3xl font-bold mb-3">Revisa y afina el guion</h1>
+    <p class="text-lg muted mb-6">Foco lo escribió con tu tono. Edítalo libre. A la derecha eliges la voz.</p>
+
+    <div class="grid md:grid-cols-[1fr_320px] gap-6">
+      <!-- Script -->
+      <div class="card p-6">
+        <div class="flex items-center justify-between mb-3">
+          <div class="flex items-center gap-2">
+            <span class="chip chip-brand"><i data-lucide="sparkles" class="w-3 h-3"></i>Generado por Foco</span>
+            <span class="chip"><i data-lucide="clock" class="w-3 h-3"></i>~58 segundos</span>
+            <span class="chip">142 palabras</span>
+          </div>
+          <button class="btn-ghost" style="padding:8px 10px;min-height:36px" title="Regenerar"><i data-lucide="refresh-ccw" class="w-4 h-4"></i></button>
+        </div>
+
+        <div contenteditable="true" class="space-y-3 text-lg leading-relaxed" style="outline:none">
+          <p><strong>[0:00]</strong> ¿Sabes por qué todos los SaaS de AI están empezando a pedirte <em>tu</em> clave de API?</p>
+          <p><strong>[0:06]</strong> No es que sean flojos. Es que el modelo BYOK — bring your own key — cambia la relación por completo.</p>
+          <p><strong>[0:14]</strong> Tú pagas directo a Anthropic o OpenAI los tokens. El SaaS cobra por lo que realmente importa: la orquestación, la UI, el agente. Y tus costos son reales, no margen inflado.</p>
+          <p><strong>[0:32]</strong> En Foco, el plan Starter es BYOK a 19 dólares. Para los que prefieren no pensar en claves, el plan Managed a 39. Mismo producto, tú eliges.</p>
+          <p><strong>[0:48]</strong> Esto es lo que hace disruptivo un SaaS hoy: transparencia en los costos. Y se viene para todos.</p>
+        </div>
+
+        <div class="divider"></div>
+
+        <div class="flex gap-2 flex-wrap">
+          <button class="btn-secondary" style="padding:8px 14px;min-height:40px"><i data-lucide="scissors" class="w-4 h-4"></i>Cortar 10s</button>
+          <button class="btn-secondary" style="padding:8px 14px;min-height:40px"><i data-lucide="flame" class="w-4 h-4"></i>Más viral</button>
+          <button class="btn-secondary" style="padding:8px 14px;min-height:40px"><i data-lucide="smile" class="w-4 h-4"></i>Más cercano</button>
+          <button class="btn-secondary" style="padding:8px 14px;min-height:40px"><i data-lucide="graduation-cap" class="w-4 h-4"></i>Más técnico</button>
+        </div>
+      </div>
+
+      <!-- Voice -->
+      <aside class="card p-5 h-fit">
+        <label class="field-label">Voz del narrador</label>
+        <div class="flex flex-col gap-2 mb-5">
+          <button class="platform-btn selected" style="padding:12px 14px">
+            <div class="avatar-photo" style="width:40px;height:40px;font-size:14px;background:linear-gradient(135deg,#8b5cf6,#ec4899)">JR</div>
+            <span class="flex-1">
+              <strong class="block">Tu voz clonada</strong>
+              <span class="muted text-xs">Español (CO) · Entrenada con 5 min</span>
+            </span>
+            <i data-lucide="check" class="w-5 h-5" style="color:#a78bfa"></i>
+          </button>
+          <button class="platform-btn" style="padding:12px 14px">
+            <div class="avatar-photo" style="width:40px;height:40px;font-size:14px;background:linear-gradient(135deg,#14b8a6,#0ea5e9)">AL</div>
+            <span class="flex-1">
+              <strong class="block">Alex</strong>
+              <span class="muted text-xs">Español (MX) · Cálida</span>
+            </span>
+            <i data-lucide="play" class="w-5 h-5 muted"></i>
+          </button>
+          <button class="platform-btn" style="padding:12px 14px">
+            <div class="avatar-photo" style="width:40px;height:40px;font-size:14px;background:linear-gradient(135deg,#f43f5e,#f59e0b)">MA</div>
+            <span class="flex-1">
+              <strong class="block">María</strong>
+              <span class="muted text-xs">Español (AR) · Enérgica</span>
+            </span>
+            <i data-lucide="play" class="w-5 h-5 muted"></i>
+          </button>
+        </div>
+
+        <label class="field-label">Velocidad</label>
+        <input type="range" min="0.7" max="1.3" step="0.05" value="1" class="w-full" />
+        <div class="flex justify-between muted text-xs mb-5"><span>0.7×</span><span>1×</span><span>1.3×</span></div>
+
+        <button class="btn-secondary w-full"><i data-lucide="volume-2" class="w-4 h-4"></i>Escuchar preview</button>
+      </aside>
+    </div>
+
+    <div class="flex justify-between mt-8">
+      <button class="btn-secondary" data-nav-to="create-1"><i data-lucide="arrow-left" class="w-4 h-4"></i>Atrás</button>
+      <button class="btn-primary" data-nav-to="create-3">Siguiente: avatar<i data-lucide="arrow-right" class="w-4 h-4"></i></button>
+    </div>
+  </div>
+</section>
+
+<!-- ======================================================================
+     SCREEN 5 — CREATE STEP 3 — avatar + face-cam
+====================================================================== -->
+<section class="screen" data-screen="create-3" data-use-shell>
+  <div class="max-w-5xl mx-auto">
+    <div class="flex items-center gap-4 mb-8">
+      <span class="progress-dot done"><i data-lucide="check" class="w-4 h-4"></i></span>
+      <span class="flex-1 h-px bg-neutral-800"></span>
+      <span class="progress-dot done"><i data-lucide="check" class="w-4 h-4"></i></span>
+      <span class="flex-1 h-px bg-neutral-800"></span>
+      <span class="progress-dot current">3</span>
+      <span class="flex-1 h-px bg-neutral-800"></span>
+      <span class="progress-dot">4</span>
+    </div>
+
+    <h1 class="text-3xl font-bold mb-3">¿Sales tú, tu avatar, o ambos?</h1>
+    <p class="text-lg muted mb-6">El híbrido es lo que hace único a Foco: face-cam real + avatar AI cuando la cámara no está lista.</p>
+
+    <div class="grid md:grid-cols-3 gap-4 mb-8">
+      <button class="card p-5 text-left cursor-pointer border-2 border-transparent hover:border-brand-500">
+        <div class="aspect-video rounded-lg bg-gradient-to-br from-amber-400 to-rose-600 mb-3 flex items-center justify-center">
+          <i data-lucide="user" class="w-12 h-12 text-white"></i>
+        </div>
+        <strong class="block mb-1">Sólo face-cam</strong>
+        <span class="muted text-sm">Yo salgo hablando. Foco sincroniza captions y recorta pausas.</span>
+      </button>
+      <button class="card p-5 text-left cursor-pointer border-2 border-brand-500 bg-brand-900/20">
+        <div class="aspect-video rounded-lg bg-gradient-to-br from-brand-500 to-indigo-700 mb-3 relative flex items-center justify-center">
+          <i data-lucide="user" class="w-10 h-10 text-white"></i>
+          <div class="absolute bottom-2 right-2 w-10 h-10 rounded-full border-2 border-white bg-gradient-to-br from-amber-400 to-rose-600"></div>
+        </div>
+        <strong class="block mb-1">Híbrido (recomendado)</strong>
+        <span class="muted text-sm">Avatar para B-roll + mi face-cam en overlay. Lo más producido.</span>
+        <span class="chip chip-brand mt-2"><i data-lucide="sparkles" class="w-3 h-3"></i>Diferenciador</span>
+      </button>
+      <button class="card p-5 text-left cursor-pointer border-2 border-transparent hover:border-brand-500">
+        <div class="aspect-video rounded-lg bg-gradient-to-br from-teal-400 to-cyan-700 mb-3 flex items-center justify-center">
+          <i data-lucide="bot" class="w-12 h-12 text-white"></i>
+        </div>
+        <strong class="block mb-1">Sólo avatar</strong>
+        <span class="muted text-sm">Día sin cámara. Avatar AI con tu voz clonada.</span>
+      </button>
+    </div>
+
+    <div class="card p-5 mb-8">
+      <div class="flex items-center justify-between mb-3">
+        <h3 class="font-bold text-lg">Plantilla visual</h3>
+        <button class="btn-ghost" style="padding:6px 10px;min-height:36px">Ver todas (24)</button>
+      </div>
+      <div class="grid grid-cols-4 gap-3">
+        <div class="rounded-xl bg-gradient-to-br from-brand-800 to-black aspect-square flex items-center justify-center border-2 border-brand-500 cursor-pointer">
+          <span class="text-white font-bold">Foco dark</span>
+        </div>
+        <div class="rounded-xl bg-gradient-to-br from-neutral-100 to-neutral-300 aspect-square flex items-center justify-center cursor-pointer hover:ring-2 ring-brand-500">
+          <span class="text-black font-bold">Minimal light</span>
+        </div>
+        <div class="rounded-xl bg-gradient-to-br from-amber-400 via-rose-500 to-fuchsia-600 aspect-square flex items-center justify-center cursor-pointer hover:ring-2 ring-brand-500">
+          <span class="text-white font-bold">Viral hot</span>
+        </div>
+        <div class="rounded-xl bg-gradient-to-br from-emerald-500 to-teal-800 aspect-square flex items-center justify-center cursor-pointer hover:ring-2 ring-brand-500">
+          <span class="text-white font-bold">Startup green</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="flex justify-between">
+      <button class="btn-secondary" data-nav-to="create-2"><i data-lucide="arrow-left" class="w-4 h-4"></i>Atrás</button>
+      <button class="btn-primary" data-nav-to="editor">Generar preview<i data-lucide="sparkles" class="w-4 h-4"></i></button>
+    </div>
+  </div>
+</section>
+
+<!-- ======================================================================
+     SCREEN 6 — EDITOR / PREVIEW (el corazón)
+====================================================================== -->
+<section class="screen" data-screen="editor" data-use-shell>
+  <div class="grid gap-6" style="grid-template-columns: 1fr 360px">
+    <!-- Main editor -->
+    <div>
+      <div class="flex items-center justify-between mb-4">
+        <div>
+          <div class="flex items-center gap-2 mb-1">
+            <span class="chip chip-brand"><i data-lucide="circle-dot" class="w-3 h-3"></i>Borrador</span>
+            <span class="chip"><i data-lucide="save" class="w-3 h-3"></i>Auto-guardado · hace 3s</span>
+          </div>
+          <h1 class="text-2xl font-bold" contenteditable="true">Por qué BYOK es el futuro de los SaaS de AI</h1>
+        </div>
+        <div class="flex gap-2">
+          <button class="btn-secondary">Regenerar</button>
+          <button class="btn-primary" data-nav-to="publish">Publicar<i data-lucide="send" class="w-4 h-4"></i></button>
+        </div>
+      </div>
+
+      <!-- Format pills (multi-format toggle) -->
+      <div class="flex items-center gap-3 mb-4">
+        <span class="muted text-sm font-semibold">Formatos:</span>
+        <button class="aspect-pill selected" style="min-height:56px;padding:6px 12px;min-width:auto;flex-direction:row;gap:8px"><span class="aspect-box aspect-9x16" style="width:14px;height:24px"></span><span class="text-sm font-semibold">Vertical 9:16</span></button>
+        <button class="aspect-pill" style="min-height:56px;padding:6px 12px;min-width:auto;flex-direction:row;gap:8px"><span class="aspect-box aspect-1x1" style="width:22px;height:22px"></span><span class="text-sm font-semibold">Cuadrado 1:1</span></button>
+        <button class="aspect-pill" style="min-height:56px;padding:6px 12px;min-width:auto;flex-direction:row;gap:8px"><span class="aspect-box aspect-16x9" style="width:28px;height:16px"></span><span class="text-sm font-semibold">Horizontal 16:9</span></button>
+        <button class="btn-ghost"><i data-lucide="plus" class="w-4 h-4"></i>Añadir</button>
+      </div>
+
+      <!-- Preview -->
+      <div class="grid md:grid-cols-[1fr_auto] gap-6">
+        <div class="preview-canvas-9x16">
+          <!-- Caption overlay -->
+          <div class="absolute inset-x-0 top-20 text-center px-6">
+            <span class="caption-word">Bring</span>
+            <span class="caption-word">your</span>
+            <span class="caption-word active">own</span>
+            <span class="caption-word">key</span>
+          </div>
+          <div class="absolute inset-x-0 bottom-28 text-center px-6 text-white text-xl font-bold" style="text-shadow:0 2px 8px rgba(0,0,0,.6)">
+            cambia la relación por completo
+          </div>
+          <!-- Face-cam overlay -->
+          <div class="preview-face-overlay"></div>
+          <!-- Play -->
+          <button class="absolute inset-0 m-auto w-16 h-16 rounded-full bg-white/90 flex items-center justify-center text-black hover:scale-105 transition" aria-label="Reproducir">
+            <i data-lucide="play" class="w-7 h-7"></i>
+          </button>
+          <!-- Timer -->
+          <span class="absolute bottom-4 left-4 chip" style="background:rgba(0,0,0,.55);color:#fff">0:14 / 0:58</span>
+        </div>
+
+        <div class="flex flex-col gap-2 w-24 muted text-xs items-center justify-start pt-2">
+          <div class="w-full aspect-video rounded bg-neutral-800 mb-2 flex items-center justify-center">Intro</div>
+          <div class="w-full aspect-video rounded bg-neutral-800 mb-2 flex items-center justify-center">Hook</div>
+          <div class="w-full aspect-video rounded bg-brand-900 border-2 border-brand-500 mb-2 flex items-center justify-center">Body</div>
+          <div class="w-full aspect-video rounded bg-neutral-800 mb-2 flex items-center justify-center">CTA</div>
+        </div>
+      </div>
+
+      <!-- Timeline -->
+      <div class="mt-6">
+        <div class="flex items-center gap-3 mb-3">
+          <button class="btn-ghost" style="padding:8px;min-height:40px" aria-label="Play"><i data-lucide="play" class="w-5 h-5"></i></button>
+          <span class="font-mono text-sm muted">0:14 · 58s total</span>
+          <div class="flex-1"></div>
+          <span class="kbd">Space</span>
+          <span class="muted text-xs">reproducir</span>
+        </div>
+
+        <div class="space-y-2">
+          <div class="flex items-center gap-3">
+            <div class="w-24 muted text-sm flex items-center gap-2"><i data-lucide="user" class="w-4 h-4"></i>Avatar</div>
+            <div class="timeline-track flex-1">
+              <div class="timeline-clip" style="left:0;width:18%;background:#7c3aed">Hook</div>
+              <div class="timeline-clip" style="left:20%;width:55%;background:#6d28d9">Body — BYOK explicado</div>
+              <div class="timeline-clip" style="left:78%;width:20%;background:#a78bfa;color:#1e1b4b">CTA</div>
+              <div class="playhead" style="left:22%"></div>
+            </div>
+          </div>
+          <div class="flex items-center gap-3">
+            <div class="w-24 muted text-sm flex items-center gap-2"><i data-lucide="video" class="w-4 h-4"></i>Face-cam</div>
+            <div class="timeline-track flex-1">
+              <div class="timeline-clip" style="left:8%;width:12%;background:#f97316">Intro</div>
+              <div class="timeline-clip" style="left:78%;width:18%;background:#ea580c">Cierre</div>
+              <div class="playhead" style="left:22%"></div>
+            </div>
+          </div>
+          <div class="flex items-center gap-3">
+            <div class="w-24 muted text-sm flex items-center gap-2"><i data-lucide="type" class="w-4 h-4"></i>Captions</div>
+            <div class="timeline-track flex-1" style="height:32px">
+              <div class="timeline-clip" style="top:3px;bottom:3px;left:2%;width:96%;background:repeating-linear-gradient(90deg, #facc15 0 8px, #eab308 8px 16px);color:#000;font-size:11px">142 palabras · word-level · highlight amarillo</div>
+              <div class="playhead" style="left:22%"></div>
+            </div>
+          </div>
+          <div class="flex items-center gap-3">
+            <div class="w-24 muted text-sm flex items-center gap-2"><i data-lucide="music" class="w-4 h-4"></i>Música</div>
+            <div class="timeline-track flex-1" style="height:32px">
+              <div class="timeline-clip" style="top:3px;bottom:3px;left:0;width:100%;background:#0ea5e9;font-size:11px">Lofi ambient · -18dB</div>
+              <div class="playhead" style="left:22%"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Right panel: captions editor -->
+    <aside class="card p-5 h-fit sticky top-4">
+      <div class="flex items-center justify-between mb-3">
+        <h3 class="font-bold text-lg">Captions</h3>
+        <span class="chip"><i data-lucide="sparkles" class="w-3 h-3"></i>WhisperX</span>
+      </div>
+
+      <label class="field-label">Estilo</label>
+      <div class="grid grid-cols-3 gap-2 mb-5">
+        <button class="aspect-pill selected" style="min-height:80px;padding:8px">
+          <span class="text-sm font-bold" style="color:#facc15">BOLD</span>
+          <span class="text-xs muted">Highlight</span>
+        </button>
+        <button class="aspect-pill" style="min-height:80px;padding:8px">
+          <span class="text-sm font-bold" style="color:#ec4899">Pop</span>
+          <span class="text-xs muted">Scale-in</span>
+        </button>
+        <button class="aspect-pill" style="min-height:80px;padding:8px">
+          <span class="text-sm font-bold">Clean</span>
+          <span class="text-xs muted">Fade</span>
+        </button>
+      </div>
+
+      <label class="field-label">Color del highlight</label>
+      <div class="flex gap-2 mb-5">
+        <button class="w-10 h-10 rounded-full border-2 border-white" style="background:#facc15" aria-label="Amarillo"></button>
+        <button class="w-10 h-10 rounded-full" style="background:#a78bfa" aria-label="Lila"></button>
+        <button class="w-10 h-10 rounded-full" style="background:#4ade80" aria-label="Verde"></button>
+        <button class="w-10 h-10 rounded-full" style="background:#f43f5e" aria-label="Rojo"></button>
+        <button class="w-10 h-10 rounded-full border border-dashed border-neutral-500" aria-label="Custom"><i data-lucide="plus" class="w-4 h-4"></i></button>
+      </div>
+
+      <label class="field-label">Palabras para enfatizar</label>
+      <p class="muted text-xs mb-3">Click en una palabra del video para marcarla. Foco ya detectó 4.</p>
+      <div class="flex flex-wrap gap-2 mb-5">
+        <span class="chip chip-brand">BYOK</span>
+        <span class="chip chip-brand">transparencia</span>
+        <span class="chip chip-brand">disruptivo</span>
+        <span class="chip chip-brand">tú eliges</span>
+      </div>
+
+      <div class="divider"></div>
+
+      <label class="field-label">Posición vertical</label>
+      <input type="range" min="0" max="100" value="35" class="w-full" />
+      <div class="flex justify-between muted text-xs mt-1"><span>Arriba</span><span>Centro</span><span>Abajo</span></div>
+    </aside>
+  </div>
+</section>
+
+<!-- ======================================================================
+     SCREEN 7 — PUBLISH modal (full screen)
+====================================================================== -->
+<section class="screen" data-screen="publish" data-use-shell>
+  <div class="max-w-4xl mx-auto">
+    <button class="btn-ghost mb-4" data-nav-to="editor"><i data-lucide="arrow-left" class="w-4 h-4"></i>Volver al editor</button>
+
+    <h1 class="text-3xl font-bold mb-3">Listo para publicar</h1>
+    <p class="text-lg muted mb-8">Selecciona dónde y cuándo. Foco adapta automáticamente el formato por plataforma.</p>
+
+    <div class="grid md:grid-cols-[1fr_320px] gap-6">
+      <div class="card p-6">
+        <h3 class="font-bold mb-4">Plataformas</h3>
+        <div class="grid gap-3">
+          <button class="platform-btn selected">
+            <span class="platform-dot" style="background:#000"></span>
+            <span class="flex-1">
+              <strong class="block">TikTok</strong>
+              <span class="muted text-xs">9:16 · @chisu.io · 2.4k seguidores</span>
+            </span>
+            <span class="chip chip-brand"><i data-lucide="check" class="w-3 h-3"></i>Seleccionado</span>
+          </button>
+          <button class="platform-btn selected">
+            <span class="platform-dot" style="background:linear-gradient(45deg,#f58529,#dd2a7b,#8134af)"></span>
+            <span class="flex-1">
+              <strong class="block">Instagram Reels</strong>
+              <span class="muted text-xs">9:16 · @jeanrojas</span>
+            </span>
+            <span class="chip chip-brand"><i data-lucide="check" class="w-3 h-3"></i>Seleccionado</span>
+          </button>
+          <button class="platform-btn">
+            <span class="platform-dot" style="background:#0a66c2"></span>
+            <span class="flex-1">
+              <strong class="block">LinkedIn</strong>
+              <span class="muted text-xs">1:1 adaptado automáticamente</span>
+            </span>
+            <span class="chip">Añadir</span>
+          </button>
+          <button class="platform-btn">
+            <span class="platform-dot" style="background:#ff0033"></span>
+            <span class="flex-1">
+              <strong class="block">YouTube Shorts</strong>
+              <span class="muted text-xs">9:16 · tu canal</span>
+            </span>
+            <span class="chip">Añadir</span>
+          </button>
+          <button class="platform-btn">
+            <span class="platform-dot" style="background:#1877f2"></span>
+            <span class="flex-1">
+              <strong class="block">Facebook Reels</strong>
+              <span class="muted text-xs">9:16 · tu página</span>
+            </span>
+            <span class="chip">Añadir</span>
+          </button>
+          <button class="platform-btn" disabled style="opacity:.55">
+            <span class="platform-dot" style="background:#000"></span>
+            <span class="flex-1">
+              <strong class="block">X (Twitter)</strong>
+              <span class="muted text-xs">No conectado</span>
+            </span>
+            <span class="chip">Conectar</span>
+          </button>
+        </div>
+
+        <div class="divider"></div>
+
+        <h3 class="font-bold mb-3">Subtítulo / descripción</h3>
+        <textarea class="input mb-2" rows="3">Por qué BYOK cambia todo en SaaS de AI. #byok #saas #startup #ai</textarea>
+        <div class="flex gap-2 flex-wrap">
+          <button class="btn-ghost" style="padding:6px 10px;min-height:36px"><i data-lucide="sparkles" class="w-3 h-3"></i>Generar variantes</button>
+          <button class="btn-ghost" style="padding:6px 10px;min-height:36px"><i data-lucide="hash" class="w-3 h-3"></i>Sugerir hashtags</button>
+        </div>
+      </div>
+
+      <aside class="card p-5 h-fit">
+        <h3 class="font-bold mb-3">Cuándo</h3>
+        <div class="space-y-2 mb-5">
+          <button class="platform-btn selected" style="padding:12px 14px">
+            <i data-lucide="zap" class="w-5 h-5"></i>
+            <span class="flex-1"><strong class="block">Ahora</strong><span class="muted text-xs">Publicar inmediatamente</span></span>
+          </button>
+          <button class="platform-btn" style="padding:12px 14px">
+            <i data-lucide="calendar-clock" class="w-5 h-5"></i>
+            <span class="flex-1"><strong class="block">Programar</strong><span class="muted text-xs">Elige fecha y hora</span></span>
+          </button>
+          <button class="platform-btn" style="padding:12px 14px">
+            <i data-lucide="trending-up" class="w-5 h-5"></i>
+            <span class="flex-1"><strong class="block">Hora pico AI</strong><span class="muted text-xs">Vie 6:12 pm (tu audiencia)</span></span>
+          </button>
+        </div>
+
+        <div class="rounded-xl bg-emerald-900/20 border border-emerald-800 p-3 text-sm mb-5">
+          <strong class="flex items-center gap-2 mb-1 text-emerald-300"><i data-lucide="circle-check" class="w-4 h-4"></i>Listo en 2 plataformas</strong>
+          <span class="muted text-xs">2 formatos generados · 14 MB total</span>
+        </div>
+
+        <button class="btn-primary w-full">Publicar ahora<i data-lucide="send" class="w-4 h-4"></i></button>
+        <p class="muted text-xs text-center mt-3">Esto es irreversible. Foco te pedirá confirmación una vez más.</p>
+      </aside>
+    </div>
+  </div>
+</section>
+
+<!-- ======================================================================
+     SCREEN 8 — LIBRARY
+====================================================================== -->
+<section class="screen" data-screen="library" data-use-shell>
+  <div>
+    <div class="flex items-center justify-between mb-6">
+      <div>
+        <h1 class="text-3xl font-bold mb-1">Biblioteca</h1>
+        <p class="muted">32 videos · 18 publicados · 14 borradores</p>
+      </div>
+      <div class="flex gap-2">
+        <div class="flex items-center gap-2 px-4 rounded-xl border border-neutral-800">
+          <i data-lucide="search" class="w-4 h-4 muted"></i>
+          <input class="bg-transparent border-0 outline-none py-2" placeholder="Buscar..." style="min-height:48px" />
+        </div>
+        <button class="btn-secondary"><i data-lucide="filter" class="w-4 h-4"></i>Filtrar</button>
+      </div>
+    </div>
+
+    <div class="flex gap-2 mb-6 overflow-x-auto">
+      <button class="chip chip-brand">Todos (32)</button>
+      <button class="chip">Publicados (18)</button>
+      <button class="chip">Borradores (14)</button>
+      <button class="chip">TikTok (12)</button>
+      <button class="chip">Instagram (9)</button>
+      <button class="chip">LinkedIn (6)</button>
+      <button class="chip">YouTube (4)</button>
+    </div>
+
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+      <!-- published -->
+      <div class="card p-3">
+        <div class="aspect-video rounded-lg bg-gradient-to-br from-indigo-500 to-purple-700 mb-3 relative flex items-center justify-center">
+          <i data-lucide="play" class="w-10 h-10 text-white"></i>
+          <span class="absolute top-2 left-2 chip" style="background:rgba(22,163,74,.3);color:#86efac"><i data-lucide="check" class="w-3 h-3"></i>Publicado</span>
+        </div>
+        <div class="font-semibold mb-1">Por qué los SaaS OSS ganan en 2026</div>
+        <div class="flex flex-wrap items-center gap-2 text-xs muted">
+          <span class="platform-dot" style="background:#000"></span>TikTok
+          <span>·</span>
+          <span class="platform-dot" style="background:linear-gradient(45deg,#f58529,#dd2a7b,#8134af)"></span>Reels
+        </div>
+        <div class="flex items-center gap-4 mt-3 text-sm">
+          <span><i data-lucide="eye" class="w-3 h-3 inline"></i> 12.4k</span>
+          <span><i data-lucide="heart" class="w-3 h-3 inline"></i> 892</span>
+          <span><i data-lucide="message-circle" class="w-3 h-3 inline"></i> 54</span>
+        </div>
+      </div>
+      <div class="card p-3">
+        <div class="aspect-video rounded-lg bg-gradient-to-br from-emerald-500 to-teal-700 mb-3 relative flex items-center justify-center">
+          <i data-lucide="play" class="w-10 h-10 text-white"></i>
+          <span class="absolute top-2 left-2 chip" style="background:rgba(22,163,74,.3);color:#86efac"><i data-lucide="check" class="w-3 h-3"></i>Publicado</span>
+        </div>
+        <div class="font-semibold mb-1">Día 3 construyendo Foco en público</div>
+        <div class="flex flex-wrap items-center gap-2 text-xs muted">
+          <span class="platform-dot" style="background:#0a66c2"></span>LinkedIn
+          <span>·</span>
+          <span class="platform-dot" style="background:#ff0033"></span>YouTube
+        </div>
+        <div class="flex items-center gap-4 mt-3 text-sm">
+          <span><i data-lucide="eye" class="w-3 h-3 inline"></i> 3.1k</span>
+          <span><i data-lucide="heart" class="w-3 h-3 inline"></i> 188</span>
+          <span><i data-lucide="message-circle" class="w-3 h-3 inline"></i> 32</span>
+        </div>
+      </div>
+      <div class="card p-3">
+        <div class="aspect-video rounded-lg bg-gradient-to-br from-fuchsia-500 to-rose-700 mb-3 relative flex items-center justify-center">
+          <i data-lucide="play" class="w-10 h-10 text-white"></i>
+          <span class="absolute top-2 left-2 chip" style="background:rgba(234,179,8,.3);color:#fde68a"><i data-lucide="clock" class="w-3 h-3"></i>Programado</span>
+        </div>
+        <div class="font-semibold mb-1">Qué aprendí de MLT Framework</div>
+        <div class="flex flex-wrap items-center gap-2 text-xs muted">
+          <span class="platform-dot" style="background:#000"></span>TikTok · Vie 6:12 pm
+        </div>
+      </div>
+      <div class="card p-3">
+        <div class="aspect-video rounded-lg bg-gradient-to-br from-amber-500 to-rose-600 mb-3 relative flex items-center justify-center">
+          <span class="absolute top-2 left-2 chip" style="background:rgba(124,58,237,.3);color:#ddd6fe"><i data-lucide="pencil" class="w-3 h-3"></i>Borrador</span>
+        </div>
+        <div class="font-semibold mb-1">WhisperX para captions word-level</div>
+        <div class="flex flex-wrap items-center gap-2 text-xs muted">
+          <i data-lucide="clock" class="w-3 h-3"></i>Actualizado hace 2h
+        </div>
+      </div>
+      <div class="card p-3">
+        <div class="aspect-video rounded-lg bg-gradient-to-br from-sky-500 to-indigo-800 mb-3 relative flex items-center justify-center">
+          <span class="absolute top-2 left-2 chip" style="background:rgba(124,58,237,.3);color:#ddd6fe"><i data-lucide="pencil" class="w-3 h-3"></i>Borrador</span>
+        </div>
+        <div class="font-semibold mb-1">Por qué ffmpeg es el tech más subestimado</div>
+        <div class="flex flex-wrap items-center gap-2 text-xs muted">
+          <i data-lucide="clock" class="w-3 h-3"></i>Hace 1 día
+        </div>
+      </div>
+      <div class="card p-3">
+        <div class="aspect-video rounded-lg border-2 border-dashed border-neutral-700 flex flex-col items-center justify-center muted cursor-pointer hover:border-brand-500 mb-3">
+          <i data-lucide="plus" class="w-10 h-10 mb-2"></i>
+          <span class="font-semibold">Crear nuevo</span>
+        </div>
+        <div class="font-semibold muted">Empieza un video desde cero</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ======================================================================
+     SCREEN 13 — MEMORY (contexto vivo del usuario)
+====================================================================== -->
+<section class="screen" data-screen="memory" data-use-shell>
+  <div class="max-w-6xl">
+    <div class="flex items-start justify-between gap-6 mb-3 flex-wrap">
+      <div>
+        <div class="flex items-center gap-3 mb-2">
+          <div class="w-12 h-12 rounded-2xl bg-brand-600 flex items-center justify-center">
+            <i data-lucide="brain" class="w-6 h-6 text-white"></i>
+          </div>
+          <h1 class="text-3xl font-bold">Memoria de Chisu</h1>
+        </div>
+        <p class="text-lg muted max-w-2xl">Aquí le enseñas a Foco quién eres, qué haces y cómo hablas. Cuanto más le des, mejor el agente escribe, edita y publica en tu nombre.</p>
+      </div>
+      <div class="card p-4 flex items-center gap-4 shrink-0">
+        <div>
+          <div class="muted text-xs">Contexto cargado</div>
+          <div class="text-2xl font-extrabold">64%</div>
+        </div>
+        <div class="w-24 h-24 relative">
+          <svg viewBox="0 0 36 36" class="w-full h-full -rotate-90">
+            <circle cx="18" cy="18" r="15.9" fill="none" stroke="rgb(38 38 38)" stroke-width="3" />
+            <circle cx="18" cy="18" r="15.9" fill="none" stroke="#7c3aed" stroke-width="3"
+                    stroke-dasharray="64 100" stroke-linecap="round" />
+          </svg>
+          <div class="absolute inset-0 flex items-center justify-center">
+            <i data-lucide="sparkles" class="w-6 h-6 text-brand-400"></i>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Chips de rapidez: qué mejoraría si agregas algo -->
+    <div class="flex gap-2 flex-wrap mb-8">
+      <span class="muted text-sm font-semibold mr-2 flex items-center">Sugerencias para completar:</span>
+      <button class="chip chip-brand"><i data-lucide="video" class="w-3 h-3"></i>Sube 2 videos tuyos hablando</button>
+      <button class="chip chip-brand"><i data-lucide="link" class="w-3 h-3"></i>Añade tu sitio web</button>
+      <button class="chip chip-brand"><i data-lucide="file-text" class="w-3 h-3"></i>Sube un one-pager de Chisu</button>
+    </div>
+
+    <!-- Añadir contexto -->
+    <h3 class="font-bold text-xl mb-2">Añadir al contexto</h3>
+    <p class="muted mb-5 max-w-3xl">Foco ingiere cualquier fuente donde vivas: archivos, apps conectadas, redes sociales, sitios y conversaciones. Todo se indexa, se cifra y queda bajo tu control.</p>
+
+    <!-- Drop zone principal -->
+    <div class="card p-8 mb-6 border-2 border-dashed border-brand-700/60 bg-brand-900/10 text-center">
+      <i data-lucide="cloud-upload" class="w-12 h-12 mx-auto mb-3 text-brand-400"></i>
+      <div class="text-lg font-semibold mb-1">Arrastra archivos aquí</div>
+      <p class="muted mb-5">PDF, DOCX, MD, TXT, XLSX, CSV, MP3, WAV, MP4, MOV, PNG, JPG, SVG y más. Hasta 500 MB por archivo.</p>
+      <div class="flex gap-3 justify-center flex-wrap">
+        <button class="btn-primary"><i data-lucide="folder-open" class="w-4 h-4"></i>Elegir archivos</button>
+        <button class="btn-secondary"><i data-lucide="link" class="w-4 h-4"></i>Pegar un link</button>
+        <button class="btn-secondary"><i data-lucide="pencil" class="w-4 h-4"></i>Escribir una nota</button>
+      </div>
+      <p class="muted text-xs mt-4">Todo se cifra en reposo y en tránsito. Nunca lo usamos para entrenar modelos de terceros.</p>
+    </div>
+
+    <!-- Link suelto (complemento del drop zone) -->
+    <div class="card p-4 mb-8 flex items-center gap-3">
+      <div class="w-10 h-10 rounded-lg bg-brand-700/30 flex items-center justify-center shrink-0"><i data-lucide="link" class="w-5 h-5 text-brand-300"></i></div>
+      <div class="min-w-0 flex-1">
+        <div class="font-semibold text-sm">Pega un link</div>
+        <div class="muted text-xs">Artículo, página web, post público, PDF online — lo extraemos y lo indexamos.</div>
+      </div>
+      <button class="btn-primary shrink-0" style="padding:8px 14px"><i data-lucide="clipboard-paste" class="w-4 h-4"></i>Pegar URL</button>
+    </div>
+
+    <!-- Conecta apps + AI -->
+    <div class="flex items-center gap-2 mb-2 mt-8">
+      <i data-lucide="plug-zap" class="w-5 h-5 text-brand-400"></i>
+      <h4 class="font-bold text-lg">Conecta tus apps y tus otras AIs</h4>
+      <span class="chip chip-brand text-xs">MVP</span>
+    </div>
+    <p class="muted text-sm mb-4 max-w-2xl">Sincronización continua. Tu material de trabajo y tus conversaciones de Claude, ChatGPT, Cursor o cualquier agente MCP compatible alimentan a Foco automáticamente.</p>
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
+      <!-- Google Drive -->
+      <button class="card p-5 hover:border-brand-500 text-left">
+        <div class="flex items-center gap-3 mb-3">
+          <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-yellow-400 via-green-500 to-blue-500 flex items-center justify-center text-white shrink-0">
+            <i data-lucide="hard-drive" class="w-6 h-6"></i>
+          </div>
+          <div class="min-w-0 flex-1">
+            <div class="font-bold">Google Drive</div>
+            <div class="muted text-xs">Docs, Sheets, Slides, PDFs</div>
+          </div>
+          <span class="chip text-xs" style="background:rgba(22,163,74,.15);color:#86efac">Conectado</span>
+        </div>
+        <p class="muted text-xs">12 carpetas sincronizadas · última revisión hace 2h</p>
+      </button>
+      <!-- GitHub -->
+      <button class="card p-5 hover:border-brand-500 text-left">
+        <div class="flex items-center gap-3 mb-3">
+          <div class="w-12 h-12 rounded-xl bg-neutral-900 border border-neutral-700 flex items-center justify-center shrink-0">
+            <i data-lucide="github" class="w-6 h-6 text-white"></i>
+          </div>
+          <div class="min-w-0 flex-1">
+            <div class="font-bold">GitHub</div>
+            <div class="muted text-xs">Repos, README, issues, commits</div>
+          </div>
+          <span class="chip text-xs" style="background:rgba(22,163,74,.15);color:#86efac">Conectado</span>
+        </div>
+        <p class="muted text-xs">3 repos públicos indexados · hydrowatch, CommonCore, foco</p>
+      </button>
+      <!-- MCP — agente a agente -->
+      <button class="card p-5 hover:border-brand-500 text-left border-brand-700 border">
+        <div class="flex items-center gap-3 mb-3">
+          <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-brand-500 via-fuchsia-500 to-amber-500 flex items-center justify-center text-white shrink-0">
+            <i data-lucide="plug" class="w-6 h-6"></i>
+          </div>
+          <div class="min-w-0 flex-1">
+            <div class="font-bold">MCP — tus otras AIs</div>
+            <div class="muted text-xs">Claude · ChatGPT · Cursor · Gemini · Raycast · custom</div>
+          </div>
+          <span class="chip chip-brand text-xs">Nuevo</span>
+        </div>
+        <p class="muted text-xs">Conecta cualquier cliente o servidor MCP. Foco extrae conversaciones, notas y contexto compartido por el protocolo abierto de Anthropic.</p>
+      </button>
+    </div>
+
+    <!-- Redes sociales -->
+    <div class="flex items-center gap-2 mb-2 mt-8">
+      <i data-lucide="at-sign" class="w-5 h-5 text-brand-400"></i>
+      <h4 class="font-bold text-lg">Importa de tus redes</h4>
+      <span class="chip chip-brand text-xs">MVP</span>
+      <span class="muted text-sm ml-1">— posts, captions, métricas</span>
+    </div>
+    <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 mb-10">
+      <!-- YouTube -->
+      <button class="card p-4 hover:border-brand-500 text-center">
+        <div class="w-12 h-12 rounded-xl bg-red-600 flex items-center justify-center text-white shrink-0 mx-auto mb-2">
+          <i data-lucide="youtube" class="w-6 h-6"></i>
+        </div>
+        <div class="font-semibold text-sm truncate">YouTube</div>
+        <span class="chip text-xs mt-2" style="background:rgba(22,163,74,.15);color:#86efac">ON</span>
+      </button>
+      <!-- TikTok -->
+      <button class="card p-4 hover:border-brand-500 text-center">
+        <div class="w-12 h-12 rounded-xl bg-black flex items-center justify-center text-white font-black text-xl shrink-0 mx-auto mb-2">t</div>
+        <div class="font-semibold text-sm truncate">TikTok</div>
+        <span class="chip text-xs mt-2"><i data-lucide="plus" class="w-3 h-3"></i>Conectar</span>
+      </button>
+      <!-- Facebook -->
+      <button class="card p-4 hover:border-brand-500 text-center">
+        <div class="w-12 h-12 rounded-xl bg-[#1877F2] flex items-center justify-center text-white shrink-0 mx-auto mb-2">
+          <i data-lucide="facebook" class="w-6 h-6"></i>
+        </div>
+        <div class="font-semibold text-sm truncate">Facebook</div>
+        <span class="chip text-xs mt-2"><i data-lucide="plus" class="w-3 h-3"></i>Conectar</span>
+      </button>
+      <!-- LinkedIn -->
+      <button class="card p-4 hover:border-brand-500 text-center">
+        <div class="w-12 h-12 rounded-xl bg-[#0A66C2] flex items-center justify-center text-white font-bold shrink-0 mx-auto mb-2">in</div>
+        <div class="font-semibold text-sm truncate">LinkedIn</div>
+        <span class="chip text-xs mt-2" style="background:rgba(22,163,74,.15);color:#86efac">ON</span>
+      </button>
+      <!-- Instagram -->
+      <button class="card p-4 hover:border-brand-500 text-center">
+        <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-purple-500 via-pink-500 to-yellow-500 flex items-center justify-center text-white shrink-0 mx-auto mb-2">
+          <i data-lucide="instagram" class="w-6 h-6"></i>
+        </div>
+        <div class="font-semibold text-sm truncate">Instagram</div>
+        <span class="chip text-xs mt-2" style="background:rgba(22,163,74,.15);color:#86efac">ON</span>
+      </button>
+      <!-- X -->
+      <button class="card p-4 hover:border-brand-500 text-center">
+        <div class="w-12 h-12 rounded-xl bg-black flex items-center justify-center text-white font-black text-xl shrink-0 mx-auto mb-2">X</div>
+        <div class="font-semibold text-sm truncate">X.com</div>
+        <span class="chip text-xs mt-2"><i data-lucide="plus" class="w-3 h-3"></i>Conectar</span>
+      </button>
+    </div>
+
+    <!-- Próximamente (roadmap) -->
+    <div class="flex items-center gap-2 mb-2 mt-8">
+      <i data-lucide="clock" class="w-5 h-5 muted"></i>
+      <h4 class="font-bold text-lg muted">Próximamente</h4>
+      <span class="muted text-sm">— vota cuál quieres primero</span>
+    </div>
+    <p class="muted text-sm mb-4 max-w-2xl">Foco abre más fuentes en cuanto el núcleo sea estable. Marca las que más te urgen y las priorizamos.</p>
+    <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 mb-10 opacity-70">
+      <button class="card p-3 hover:opacity-100 hover:border-brand-500 text-center" title="Votar Notion">
+        <div class="w-8 h-8 rounded-lg bg-white flex items-center justify-center text-black font-black text-sm mx-auto mb-1">N</div>
+        <div class="text-xs font-semibold">Notion</div>
+      </button>
+      <button class="card p-3 hover:opacity-100 hover:border-brand-500 text-center" title="Votar Dropbox">
+        <div class="w-8 h-8 rounded-lg bg-[#0061FF] flex items-center justify-center text-white mx-auto mb-1"><i data-lucide="box" class="w-4 h-4"></i></div>
+        <div class="text-xs font-semibold">Dropbox</div>
+      </button>
+      <button class="card p-3 hover:opacity-100 hover:border-brand-500 text-center" title="Votar OneDrive">
+        <div class="w-8 h-8 rounded-lg bg-[#0078D4] flex items-center justify-center text-white mx-auto mb-1"><i data-lucide="cloud" class="w-4 h-4"></i></div>
+        <div class="text-xs font-semibold">OneDrive</div>
+      </button>
+      <button class="card p-3 hover:opacity-100 hover:border-brand-500 text-center" title="Votar Figma">
+        <div class="w-8 h-8 rounded-lg bg-neutral-900 border border-neutral-700 flex items-center justify-center mx-auto mb-1"><i data-lucide="figma" class="w-4 h-4 text-pink-400"></i></div>
+        <div class="text-xs font-semibold">Figma</div>
+      </button>
+      <button class="card p-3 hover:opacity-100 hover:border-brand-500 text-center" title="Votar Slack">
+        <div class="w-8 h-8 rounded-lg bg-[#4A154B] flex items-center justify-center text-white mx-auto mb-1"><i data-lucide="slack" class="w-4 h-4"></i></div>
+        <div class="text-xs font-semibold">Slack</div>
+      </button>
+      <button class="card p-3 hover:opacity-100 hover:border-brand-500 text-center" title="Votar Discord">
+        <div class="w-8 h-8 rounded-lg bg-[#5865F2] flex items-center justify-center text-white mx-auto mb-1"><i data-lucide="message-circle" class="w-4 h-4"></i></div>
+        <div class="text-xs font-semibold">Discord</div>
+      </button>
+      <button class="card p-3 hover:opacity-100 hover:border-brand-500 text-center" title="Votar Gmail">
+        <div class="w-8 h-8 rounded-lg bg-white flex items-center justify-center mx-auto mb-1"><i data-lucide="mail" class="w-4 h-4 text-red-500"></i></div>
+        <div class="text-xs font-semibold">Gmail</div>
+      </button>
+      <button class="card p-3 hover:opacity-100 hover:border-brand-500 text-center" title="Votar Calendar">
+        <div class="w-8 h-8 rounded-lg bg-neutral-900 border border-neutral-700 flex items-center justify-center mx-auto mb-1"><i data-lucide="calendar" class="w-4 h-4 text-brand-400"></i></div>
+        <div class="text-xs font-semibold">Calendar</div>
+      </button>
+      <button class="card p-3 hover:opacity-100 hover:border-brand-500 text-center" title="Votar Threads">
+        <div class="w-8 h-8 rounded-lg bg-black flex items-center justify-center text-white mx-auto mb-1"><i data-lucide="at-sign" class="w-4 h-4"></i></div>
+        <div class="text-xs font-semibold">Threads</div>
+      </button>
+      <button class="card p-3 hover:opacity-100 hover:border-brand-500 text-center" title="Votar Spotify Podcasts">
+        <div class="w-8 h-8 rounded-lg bg-[#1DB954] flex items-center justify-center text-white mx-auto mb-1"><i data-lucide="headphones" class="w-4 h-4"></i></div>
+        <div class="text-xs font-semibold">Spotify</div>
+      </button>
+      <button class="card p-3 hover:opacity-100 hover:border-brand-500 text-center" title="Votar crawl de sitio">
+        <div class="w-8 h-8 rounded-lg bg-brand-700/30 flex items-center justify-center mx-auto mb-1"><i data-lucide="globe-2" class="w-4 h-4 text-brand-300"></i></div>
+        <div class="text-xs font-semibold">Crawl sitio</div>
+      </button>
+      <button class="card p-3 hover:opacity-100 hover:border-brand-500 text-center" title="Votar RSS">
+        <div class="w-8 h-8 rounded-lg bg-brand-700/30 flex items-center justify-center mx-auto mb-1"><i data-lucide="rss" class="w-4 h-4 text-brand-300"></i></div>
+        <div class="text-xs font-semibold">RSS / Blog</div>
+      </button>
+      <button class="card p-3 hover:opacity-100 hover:border-brand-500 text-center" title="Votar WhatsApp">
+        <div class="w-8 h-8 rounded-lg bg-[#25D366] flex items-center justify-center text-white mx-auto mb-1"><i data-lucide="message-square" class="w-4 h-4"></i></div>
+        <div class="text-xs font-semibold">WhatsApp</div>
+      </button>
+      <button class="card p-3 hover:opacity-100 hover:border-brand-500 text-center" title="Votar Linear">
+        <div class="w-8 h-8 rounded-lg bg-black border border-neutral-700 flex items-center justify-center text-white font-bold text-xs mx-auto mb-1">L</div>
+        <div class="text-xs font-semibold">Linear</div>
+      </button>
+      <button class="card p-3 hover:opacity-100 hover:border-brand-500 text-center" title="Votar Airtable">
+        <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-yellow-500 to-orange-500 flex items-center justify-center text-white mx-auto mb-1"><i data-lucide="table-2" class="w-4 h-4"></i></div>
+        <div class="text-xs font-semibold">Airtable</div>
+      </button>
+      <button class="card p-3 hover:opacity-100 hover:border-brand-500 text-center" title="Proponer otra fuente">
+        <div class="w-8 h-8 rounded-lg bg-brand-700/30 flex items-center justify-center mx-auto mb-1"><i data-lucide="plus" class="w-4 h-4 text-brand-300"></i></div>
+        <div class="text-xs font-semibold">Sugerir…</div>
+      </button>
+    </div>
+
+    <!-- Lo que Foco ya sabe -->
+    <div class="flex items-end justify-between mb-4 flex-wrap gap-3">
+      <div>
+        <h3 class="font-bold text-xl">Lo que Foco ya sabe de ti</h3>
+        <p class="muted text-sm">42 elementos en tu memoria. El agente los consulta cada vez que crea un video.</p>
+      </div>
+      <div class="flex gap-2">
+        <button class="btn-ghost"><i data-lucide="search" class="w-4 h-4"></i>Buscar</button>
+        <button class="btn-ghost"><i data-lucide="download" class="w-4 h-4"></i>Exportar</button>
+      </div>
+    </div>
+
+    <!-- Filtros -->
+    <div class="flex gap-2 flex-wrap mb-5">
+      <button class="chip chip-brand">Todos (38)</button>
+      <button class="chip">Aprendizajes (6)</button>
+      <button class="chip">Archivos (9)</button>
+      <button class="chip">Links (4)</button>
+      <button class="chip">Google Drive (5)</button>
+      <button class="chip">GitHub (3)</button>
+      <button class="chip">YouTube (4)</button>
+      <button class="chip">Instagram (2)</button>
+      <button class="chip">LinkedIn (3)</button>
+      <button class="chip">MCP / AI (2)</button>
+    </div>
+
+    <!-- Grid de elementos -->
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-8">
+      <!-- Aprendizaje sintetizado por Foco -->
+      <div class="card p-5 border-brand-700 border">
+        <div class="flex items-center gap-2 mb-3">
+          <span class="chip chip-brand"><i data-lucide="sparkles" class="w-3 h-3"></i>Aprendizaje</span>
+          <span class="chip"><i data-lucide="lock" class="w-3 h-3"></i>Privado</span>
+        </div>
+        <strong class="block mb-2 text-base leading-snug">Hablas con autoridad pero cercano. Evitas jergas vacías. Ejemplos concretos &gt; abstracciones.</strong>
+        <p class="muted text-sm mb-4">Foco extrajo esto de 3 videos tuyos + 2 posts de LinkedIn. Úsalo como base para el tono.</p>
+        <div class="flex gap-2">
+          <button class="btn-ghost" style="padding:6px 10px;min-height:36px"><i data-lucide="pencil" class="w-3 h-3"></i>Editar</button>
+          <button class="btn-ghost" style="padding:6px 10px;min-height:36px"><i data-lucide="eye" class="w-3 h-3"></i>Ver fuentes</button>
+        </div>
+      </div>
+
+      <!-- Documento -->
+      <div class="card p-5">
+        <div class="flex items-center gap-2 mb-3">
+          <span class="chip"><i data-lucide="file-text" class="w-3 h-3"></i>PDF</span>
+          <span class="chip" style="background:rgba(22,163,74,.15);color:#86efac"><i data-lucide="check" class="w-3 h-3"></i>Indexado</span>
+        </div>
+        <strong class="block mb-1">Chisu — one-pager inversores.pdf</strong>
+        <p class="muted text-sm mb-3">4 páginas · subido hace 12 días · 38 chunks indexados</p>
+        <div class="flex gap-2">
+          <button class="btn-ghost" style="padding:6px 10px;min-height:36px"><i data-lucide="eye" class="w-3 h-3"></i>Ver</button>
+          <button class="btn-ghost" style="padding:6px 10px;min-height:36px"><i data-lucide="trash-2" class="w-3 h-3"></i>Borrar</button>
+        </div>
+      </div>
+
+      <!-- Link con thumbnail -->
+      <div class="card p-5">
+        <div class="flex items-center gap-2 mb-3">
+          <span class="chip"><i data-lucide="link" class="w-3 h-3"></i>Link</span>
+          <span class="chip" style="background:rgba(22,163,74,.15);color:#86efac"><i data-lucide="check" class="w-3 h-3"></i>Indexado</span>
+        </div>
+        <div class="flex gap-3">
+          <div class="w-16 h-16 rounded-lg bg-gradient-to-br from-blue-500 to-indigo-700 shrink-0 flex items-center justify-center text-white font-bold">in</div>
+          <div class="min-w-0">
+            <strong class="block truncate">Mi post sobre AVOP en LinkedIn</strong>
+            <p class="muted text-xs truncate">linkedin.com/in/jeanrojas/posts</p>
+          </div>
+        </div>
+        <div class="flex gap-2 mt-4">
+          <button class="btn-ghost" style="padding:6px 10px;min-height:36px"><i data-lucide="external-link" class="w-3 h-3"></i>Abrir</button>
+          <button class="btn-ghost" style="padding:6px 10px;min-height:36px"><i data-lucide="trash-2" class="w-3 h-3"></i>Borrar</button>
+        </div>
+      </div>
+
+      <!-- Video de referencia -->
+      <div class="card p-5">
+        <div class="flex items-center gap-2 mb-3">
+          <span class="chip"><i data-lucide="video" class="w-3 h-3"></i>Video</span>
+          <span class="chip" style="background:rgba(234,179,8,.15);color:#fde68a"><i data-lucide="loader" class="w-3 h-3"></i>Procesando</span>
+        </div>
+        <div class="aspect-video rounded-lg bg-gradient-to-br from-fuchsia-500 to-amber-500 mb-3 flex items-center justify-center relative">
+          <i data-lucide="play" class="w-10 h-10 text-white"></i>
+          <span class="absolute bottom-2 right-2 chip" style="background:rgba(0,0,0,.6);color:#fff">2:14</span>
+        </div>
+        <strong class="block mb-1">Así hablo en cámara (muestra)</strong>
+        <p class="muted text-sm">WhisperX + análisis de tono a mitad</p>
+      </div>
+
+      <!-- Nota libre -->
+      <div class="card p-5">
+        <div class="flex items-center gap-2 mb-3">
+          <span class="chip"><i data-lucide="pencil" class="w-3 h-3"></i>Nota</span>
+          <span class="chip" style="background:rgba(22,163,74,.15);color:#86efac"><i data-lucide="check" class="w-3 h-3"></i>Indexado</span>
+        </div>
+        <strong class="block mb-2">Cosas que nunca digo en video</strong>
+        <p class="muted text-sm mb-3 leading-relaxed">"Honestamente", "literalmente", "super", "genial". Tampoco emojis fuera de captions. Nada de "amigos" para abrir.</p>
+        <div class="flex gap-2">
+          <button class="btn-ghost" style="padding:6px 10px;min-height:36px"><i data-lucide="pencil" class="w-3 h-3"></i>Editar</button>
+          <button class="btn-ghost" style="padding:6px 10px;min-height:36px"><i data-lucide="trash-2" class="w-3 h-3"></i>Borrar</button>
+        </div>
+      </div>
+
+      <!-- Aprendizaje 2 -->
+      <div class="card p-5 border-brand-700 border">
+        <div class="flex items-center gap-2 mb-3">
+          <span class="chip chip-brand"><i data-lucide="sparkles" class="w-3 h-3"></i>Aprendizaje</span>
+          <span class="chip"><i data-lucide="lock" class="w-3 h-3"></i>Privado</span>
+        </div>
+        <strong class="block mb-2 text-base leading-snug">Tu audiencia principal son founders técnicos (ICP Chisu) + SWE senior con curiosidad por AI. Evita tono para junior.</strong>
+        <p class="muted text-sm mb-4">Extraído de tus últimos 6 videos + análisis de comentarios.</p>
+        <div class="flex gap-2">
+          <button class="btn-ghost" style="padding:6px 10px;min-height:36px"><i data-lucide="pencil" class="w-3 h-3"></i>Editar</button>
+          <button class="btn-ghost" style="padding:6px 10px;min-height:36px"><i data-lucide="eye" class="w-3 h-3"></i>Ver fuentes</button>
+        </div>
+      </div>
+
+      <!-- Instagram Reel -->
+      <div class="card p-5">
+        <div class="flex items-center gap-2 mb-3">
+          <span class="chip"><i data-lucide="instagram" class="w-3 h-3 text-pink-400"></i>Instagram</span>
+          <span class="chip" style="background:rgba(22,163,74,.15);color:#86efac"><i data-lucide="check" class="w-3 h-3"></i>Caption + métricas</span>
+        </div>
+        <strong class="block mb-1">Reel: "Mi stack 2026" · 38k views</strong>
+        <p class="muted text-sm mb-3">Publicado hace 9 días · 1,240 saves · 94% retention 3s</p>
+        <div class="flex gap-2">
+          <button class="btn-ghost" style="padding:6px 10px;min-height:36px"><i data-lucide="external-link" class="w-3 h-3"></i>Abrir</button>
+          <button class="btn-ghost" style="padding:6px 10px;min-height:36px"><i data-lucide="trash-2" class="w-3 h-3"></i>Quitar</button>
+        </div>
+      </div>
+
+      <!-- Documento markdown -->
+      <div class="card p-5">
+        <div class="flex items-center gap-2 mb-3">
+          <span class="chip"><i data-lucide="file-code" class="w-3 h-3"></i>Markdown</span>
+          <span class="chip" style="background:rgba(22,163,74,.15);color:#86efac"><i data-lucide="check" class="w-3 h-3"></i>Indexado</span>
+        </div>
+        <strong class="block mb-1">ICP_Chisu.md</strong>
+        <p class="muted text-sm mb-3">Perfil del cliente ideal · 1,240 palabras</p>
+        <div class="flex gap-2">
+          <button class="btn-ghost" style="padding:6px 10px;min-height:36px"><i data-lucide="eye" class="w-3 h-3"></i>Ver</button>
+          <button class="btn-ghost" style="padding:6px 10px;min-height:36px"><i data-lucide="trash-2" class="w-3 h-3"></i>Borrar</button>
+        </div>
+      </div>
+
+      <!-- Google Drive doc -->
+      <div class="card p-5">
+        <div class="flex items-center gap-2 mb-3">
+          <span class="chip"><i data-lucide="hard-drive" class="w-3 h-3 text-blue-400"></i>Google Drive</span>
+          <span class="chip" style="background:rgba(22,163,74,.15);color:#86efac"><i data-lucide="refresh-cw" class="w-3 h-3"></i>Sync cada 2h</span>
+        </div>
+        <strong class="block mb-1">Chisu — Brand Book v2 (Google Doc)</strong>
+        <p class="muted text-sm mb-3">12 páginas · 3,450 palabras · última edición ayer</p>
+        <div class="flex gap-2">
+          <button class="btn-ghost" style="padding:6px 10px;min-height:36px"><i data-lucide="external-link" class="w-3 h-3"></i>Abrir</button>
+          <button class="btn-ghost" style="padding:6px 10px;min-height:36px"><i data-lucide="trash-2" class="w-3 h-3"></i>Quitar</button>
+        </div>
+      </div>
+
+      <!-- YouTube video -->
+      <div class="card p-5">
+        <div class="flex items-center gap-2 mb-3">
+          <span class="chip"><i data-lucide="youtube" class="w-3 h-3 text-red-500"></i>YouTube</span>
+          <span class="chip" style="background:rgba(22,163,74,.15);color:#86efac"><i data-lucide="check" class="w-3 h-3"></i>Transcripción lista</span>
+        </div>
+        <div class="aspect-video rounded-lg bg-gradient-to-br from-red-600 via-fuchsia-600 to-orange-500 mb-3 flex items-center justify-center relative">
+          <i data-lucide="play" class="w-10 h-10 text-white"></i>
+          <span class="absolute bottom-2 right-2 chip" style="background:rgba(0,0,0,.6);color:#fff">14:08</span>
+        </div>
+        <strong class="block mb-1">Cómo construí AVOP en 30 días</strong>
+        <p class="muted text-sm mb-2">Tu canal · 2,104 views · transcript + capítulos</p>
+      </div>
+
+      <!-- GitHub repo -->
+      <div class="card p-5">
+        <div class="flex items-center gap-2 mb-3">
+          <span class="chip"><i data-lucide="github" class="w-3 h-3"></i>GitHub</span>
+          <span class="chip" style="background:rgba(22,163,74,.15);color:#86efac"><i data-lucide="check" class="w-3 h-3"></i>README + issues</span>
+        </div>
+        <div class="flex items-center gap-2 mb-1">
+          <i data-lucide="folder-git-2" class="w-4 h-4 muted"></i>
+          <strong class="block">jeanrojas/hydrowatch</strong>
+        </div>
+        <p class="muted text-sm mb-3">Django + FastAPI + Claude · 87 commits · 3 issues abiertas</p>
+        <div class="flex gap-2">
+          <button class="btn-ghost" style="padding:6px 10px;min-height:36px"><i data-lucide="external-link" class="w-3 h-3"></i>Ver repo</button>
+          <button class="btn-ghost" style="padding:6px 10px;min-height:36px"><i data-lucide="trash-2" class="w-3 h-3"></i>Quitar</button>
+        </div>
+      </div>
+
+      <!-- MCP conversation -->
+      <div class="card p-5 border-brand-700 border">
+        <div class="flex items-center gap-2 mb-3">
+          <span class="chip"><i data-lucide="plug" class="w-3 h-3 text-brand-300"></i>MCP · Claude Desktop</span>
+          <span class="chip" style="background:rgba(22,163,74,.15);color:#86efac"><i data-lucide="check" class="w-3 h-3"></i>En vivo</span>
+        </div>
+        <strong class="block mb-1">Sesión: diseño de arquitectura Foco</strong>
+        <p class="muted text-sm mb-3">142 mensajes · 31k tokens · última sync hace 4 min · servidor local MCP</p>
+        <div class="flex gap-2">
+          <button class="btn-ghost" style="padding:6px 10px;min-height:36px"><i data-lucide="eye" class="w-3 h-3"></i>Ver</button>
+          <button class="btn-ghost" style="padding:6px 10px;min-height:36px"><i data-lucide="trash-2" class="w-3 h-3"></i>Quitar</button>
+        </div>
+      </div>
+
+      <!-- Sitio web crawl -->
+      <div class="card p-5">
+        <div class="flex items-center gap-2 mb-3">
+          <span class="chip"><i data-lucide="globe-2" class="w-3 h-3"></i>Sitio web</span>
+          <span class="chip" style="background:rgba(22,163,74,.15);color:#86efac"><i data-lucide="check" class="w-3 h-3"></i>42 páginas</span>
+        </div>
+        <strong class="block mb-1">chisu.io</strong>
+        <p class="muted text-sm mb-3">Crawl completo · landing + blog + docs · re-indexa cada lunes</p>
+        <div class="flex gap-2">
+          <button class="btn-ghost" style="padding:6px 10px;min-height:36px"><i data-lucide="external-link" class="w-3 h-3"></i>Abrir</button>
+          <button class="btn-ghost" style="padding:6px 10px;min-height:36px"><i data-lucide="refresh-cw" class="w-3 h-3"></i>Re-indexar</button>
+        </div>
+      </div>
+
+      <!-- Aprendizaje 3 -->
+      <div class="card p-5 border-brand-700 border">
+        <div class="flex items-center gap-2 mb-3">
+          <span class="chip chip-brand"><i data-lucide="sparkles" class="w-3 h-3"></i>Aprendizaje</span>
+          <span class="chip"><i data-lucide="lock" class="w-3 h-3"></i>Privado</span>
+        </div>
+        <strong class="block mb-2 text-base leading-snug">Tus videos tipo "behind-the-scenes" (con cámara frontal y caption rápido) rinden 4.2× más en IG que los talking-head formales.</strong>
+        <p class="muted text-sm mb-4">Comparativa de 14 reels últimos 60 días.</p>
+        <div class="flex gap-2">
+          <button class="btn-ghost" style="padding:6px 10px;min-height:36px"><i data-lucide="pencil" class="w-3 h-3"></i>Editar</button>
+          <button class="btn-ghost" style="padding:6px 10px;min-height:36px"><i data-lucide="eye" class="w-3 h-3"></i>Ver fuentes</button>
+        </div>
+      </div>
+
+      <!-- Añadir -->
+      <button class="card p-5 border-2 border-dashed border-neutral-800 flex flex-col items-center justify-center text-center min-h-[180px] hover:border-brand-500 muted cursor-pointer">
+        <i data-lucide="plus" class="w-10 h-10 mb-2"></i>
+        <span class="font-semibold text-base">Añadir elemento</span>
+        <span class="text-xs mt-1">Documento, link, nota, video...</span>
+      </button>
+    </div>
+
+    <!-- Privacidad y control -->
+    <div class="card p-6 mb-4">
+      <div class="flex items-center gap-3 mb-4">
+        <i data-lucide="shield-check" class="w-6 h-6 text-brand-400"></i>
+        <h3 class="font-bold text-lg">Privacidad y control</h3>
+      </div>
+      <div class="space-y-4">
+        <label class="flex items-center justify-between gap-4 p-3 rounded-xl hover:bg-neutral-900 cursor-pointer">
+          <div>
+            <strong class="block">Compartir memoria con mi equipo</strong>
+            <span class="muted text-sm">Desactivado · tu memoria es sólo tuya. Disponible en plan Team.</span>
+          </div>
+          <div class="relative w-12 h-7 rounded-full bg-neutral-800">
+            <span class="absolute top-0.5 left-0.5 w-6 h-6 rounded-full bg-neutral-600 transition"></span>
+          </div>
+        </label>
+        <label class="flex items-center justify-between gap-4 p-3 rounded-xl hover:bg-neutral-900 cursor-pointer">
+          <div>
+            <strong class="block">Olvidar elementos no usados hace 90 días</strong>
+            <span class="muted text-sm">Mantén tu memoria fresca y pequeña automáticamente.</span>
+          </div>
+          <div class="relative w-12 h-7 rounded-full bg-brand-600">
+            <span class="absolute top-0.5 right-0.5 w-6 h-6 rounded-full bg-white transition"></span>
+          </div>
+        </label>
+        <label class="flex items-center justify-between gap-4 p-3 rounded-xl hover:bg-neutral-900 cursor-pointer">
+          <div>
+            <strong class="block">Permitir que Foco aprenda de mis publicaciones</strong>
+            <span class="muted text-sm">Lee tus videos publicados para ajustar tono y estructura. Nunca sale de tu cuenta.</span>
+          </div>
+          <div class="relative w-12 h-7 rounded-full bg-brand-600">
+            <span class="absolute top-0.5 right-0.5 w-6 h-6 rounded-full bg-white transition"></span>
+          </div>
+        </label>
+      </div>
+    </div>
+
+    <!-- MCP: widget compacto con enlace a la pantalla dedicada -->
+    <div class="card p-5 mb-4 border-brand-700 border">
+      <div class="flex items-start gap-4 flex-wrap">
+        <div class="rounded-xl bg-brand-600/15 p-3 shrink-0">
+          <i data-lucide="plug" class="w-6 h-6 text-brand-400"></i>
+        </div>
+        <div class="flex-1 min-w-[240px]">
+          <div class="flex items-center gap-2 mb-1 flex-wrap">
+            <strong class="text-base">Gateway MCP</strong>
+            <span class="chip chip-brand text-xs">Bi-direccional</span>
+            <span class="chip text-xs" style="background:rgba(34,197,94,.15);color:#86efac">Activo</span>
+          </div>
+          <p class="muted text-sm mb-2">Foco lee contexto de <strong>3 AIs</strong> (Claude Desktop, Cursor, ChatGPT) y expone tu memoria a <strong>1 agente</strong> con scope acotado.</p>
+          <div class="flex gap-3 flex-wrap text-xs muted">
+            <span class="flex items-center gap-1"><i data-lucide="arrow-down-to-line" class="w-3 h-3 text-green-400"></i>Leer: 3 activos</span>
+            <span class="flex items-center gap-1"><i data-lucide="arrow-up-from-line" class="w-3 h-3 text-brand-300"></i>Exponer: 1 activo</span>
+            <span class="flex items-center gap-1"><i data-lucide="shield-check" class="w-3 h-3 text-brand-300"></i>Audit log al día</span>
+          </div>
+        </div>
+        <button class="btn-secondary" data-nav-to="settings-mcp"><i data-lucide="settings-2" class="w-4 h-4"></i>Configurar gateway</button>
+      </div>
+    </div>
+
+    <div class="card p-6 border-rose-900 border">
+      <div class="flex items-center gap-3 mb-3">
+        <i data-lucide="triangle-alert" class="w-6 h-6" style="color:#f87171"></i>
+        <h3 class="font-bold text-lg">Zona delicada</h3>
+      </div>
+      <p class="muted mb-4 text-sm">Borra todo el contexto que Foco tiene sobre ti. El agente volverá a escribir sin saber nada de Chisu. No es reversible.</p>
+      <div class="flex gap-2 flex-wrap">
+        <button class="btn-secondary" style="border-color:#7f1d1d;color:#fca5a5"><i data-lucide="trash-2" class="w-4 h-4"></i>Vaciar memoria</button>
+      </div>
+      <p class="muted text-xs mt-3">El kill switch del servidor MCP vive en <a class="text-brand-300 underline" data-nav-to="settings-mcp">Ajustes · MCP Gateway</a>.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ======================================================================
+     SCREEN 9 — SETTINGS: BRAND
+====================================================================== -->
+<section class="screen" data-screen="settings-brand" data-use-shell>
+  <div class="max-w-4xl">
+    <h1 class="text-3xl font-bold mb-2">Marca</h1>
+    <p class="text-lg muted mb-8">Tu marca es lo que Foco aplica a cada video automáticamente. Colores, tipografía, voz, avatar — todo aquí.</p>
+
+    <div class="card p-6 mb-4">
+      <h3 class="font-bold mb-4">Identidad visual</h3>
+      <div class="grid md:grid-cols-[200px_1fr] gap-6 items-center">
+        <div class="aspect-square rounded-2xl bg-gradient-to-br from-brand-700 to-black flex items-center justify-center text-white text-7xl font-extrabold">F</div>
+        <div class="flex-1 space-y-4">
+          <div>
+            <label class="field-label">Logo</label>
+            <div class="flex gap-2">
+              <button class="btn-secondary"><i data-lucide="upload" class="w-4 h-4"></i>Reemplazar</button>
+              <button class="btn-ghost">Eliminar</button>
+            </div>
+          </div>
+          <div>
+            <label class="field-label">Nombre de marca</label>
+            <input class="input" value="Chisu" />
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card p-6 mb-4">
+      <h3 class="font-bold mb-4">Paleta</h3>
+      <div class="flex gap-4 flex-wrap">
+        <div class="flex items-center gap-3">
+          <span class="w-16 h-16 rounded-2xl" style="background:#7c3aed"></span>
+          <div>
+            <div class="text-xs muted">Primario</div>
+            <div class="font-mono font-semibold">#7C3AED</div>
+          </div>
+        </div>
+        <div class="flex items-center gap-3">
+          <span class="w-16 h-16 rounded-2xl" style="background:#facc15"></span>
+          <div>
+            <div class="text-xs muted">Highlight</div>
+            <div class="font-mono font-semibold">#FACC15</div>
+          </div>
+        </div>
+        <div class="flex items-center gap-3">
+          <span class="w-16 h-16 rounded-2xl" style="background:#0a0a0a;border:1px solid #333"></span>
+          <div>
+            <div class="text-xs muted">Fondo</div>
+            <div class="font-mono font-semibold">#0A0A0A</div>
+          </div>
+        </div>
+        <button class="btn-ghost"><i data-lucide="plus" class="w-4 h-4"></i>Añadir color</button>
+      </div>
+    </div>
+
+    <div class="card p-6 mb-4">
+      <h3 class="font-bold mb-4">Tipografía</h3>
+      <div class="grid md:grid-cols-2 gap-4">
+        <div>
+          <label class="field-label">Display</label>
+          <select class="input"><option>Inter ExtraBold</option><option>Satoshi</option><option>Sora</option></select>
+          <div class="mt-3 text-2xl font-extrabold">Tu primer video ya sale</div>
+        </div>
+        <div>
+          <label class="field-label">Captions</label>
+          <select class="input"><option>Inter Black</option><option>Anton</option><option>Bebas Neue</option></select>
+          <div class="mt-3 text-xl font-black">BYOK CAMBIA TODO</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card p-6 mb-4">
+      <h3 class="font-bold mb-4">Voz y avatar</h3>
+      <div class="space-y-3">
+        <div class="flex items-center gap-4">
+          <div class="avatar-photo">JR</div>
+          <div class="flex-1">
+            <strong class="block">Avatar AI "Jean"</strong>
+            <span class="muted text-sm">7 fotos · LivePortrait v2 · última actualización hace 3 días</span>
+          </div>
+          <button class="btn-ghost">Re-entrenar</button>
+        </div>
+        <div class="divider" style="margin:12px 0"></div>
+        <div class="flex items-center gap-4">
+          <div class="avatar-photo" style="background:linear-gradient(135deg,#14b8a6,#0ea5e9)"><i data-lucide="mic" class="w-6 h-6"></i></div>
+          <div class="flex-1">
+            <strong class="block">Voz clonada "Jean ES-CO"</strong>
+            <span class="muted text-sm">XTTS v2 · 5 min de muestra · 98% similarity</span>
+          </div>
+          <button class="btn-ghost">Escuchar</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ======================================================================
+     SCREEN 10 — SETTINGS: BYOK + INTEGRATIONS
+====================================================================== -->
+<section class="screen" data-screen="settings-integrations" data-use-shell>
+  <div class="max-w-4xl">
+    <h1 class="text-3xl font-bold mb-2">Claves e integraciones</h1>
+    <p class="text-lg muted mb-8">Aquí controlas a qué servicios conecta Foco en tu nombre, y tus claves de API si eres BYOK.</p>
+
+    <div class="card p-6 mb-4">
+      <div class="flex items-center gap-3 mb-4">
+        <i data-lucide="key-round" class="w-6 h-6"></i>
+        <h3 class="font-bold text-lg">Bring Your Own Key (BYOK)</h3>
+        <span class="chip chip-brand">Plan Starter</span>
+      </div>
+      <p class="muted mb-4">Trae tu propia clave de Anthropic y Foco no cobra por tokens. Sólo paga la convenience.</p>
+
+      <label class="field-label">Clave Anthropic API</label>
+      <div class="flex gap-2 mb-3">
+        <input class="input flex-1" type="password" value="sk-ant-api03-••••••••••••••••••••••••••••••••••" />
+        <button class="btn-secondary"><i data-lucide="eye" class="w-4 h-4"></i></button>
+        <button class="btn-secondary">Actualizar</button>
+      </div>
+      <div class="flex items-center gap-2 text-sm" style="color:#4ade80">
+        <i data-lucide="circle-check" class="w-4 h-4"></i>
+        Válida · último uso hace 8 min · 124k tokens este mes
+      </div>
+
+      <div class="divider"></div>
+
+      <h4 class="font-semibold mb-2">¿No tienes clave?</h4>
+      <div class="flex gap-2">
+        <button class="btn-secondary"><i data-lucide="external-link" class="w-4 h-4"></i>Obtener una en Anthropic</button>
+        <button class="btn-ghost" data-nav-to="settings-billing">O cambiar a plan Managed</button>
+      </div>
+    </div>
+
+    <div class="card p-6">
+      <div class="flex items-center gap-3 mb-4">
+        <i data-lucide="plug" class="w-6 h-6"></i>
+        <h3 class="font-bold text-lg">Plataformas sociales</h3>
+      </div>
+      <div class="space-y-3">
+        <div class="platform-btn connected" style="cursor:default">
+          <span class="platform-dot" style="background:#000"></span>
+          <span class="flex-1">
+            <strong class="block">TikTok · @chisu.io</strong>
+            <span class="muted text-xs">Conectado hace 2 días · scope: publish</span>
+          </span>
+          <button class="btn-ghost">Desconectar</button>
+        </div>
+        <div class="platform-btn connected" style="cursor:default">
+          <span class="platform-dot" style="background:linear-gradient(45deg,#f58529,#dd2a7b,#8134af)"></span>
+          <span class="flex-1">
+            <strong class="block">Instagram · @jeanrojas</strong>
+            <span class="muted text-xs">Conectado hace 2 días</span>
+          </span>
+          <button class="btn-ghost">Desconectar</button>
+        </div>
+        <div class="platform-btn" style="cursor:default">
+          <span class="platform-dot" style="background:#0a66c2"></span>
+          <span class="flex-1">
+            <strong class="block">LinkedIn</strong>
+            <span class="muted text-xs">No conectado</span>
+          </span>
+          <button class="btn-secondary">Conectar</button>
+        </div>
+        <div class="platform-btn" style="cursor:default">
+          <span class="platform-dot" style="background:#ff0033"></span>
+          <span class="flex-1">
+            <strong class="block">YouTube</strong>
+            <span class="muted text-xs">No conectado</span>
+          </span>
+          <button class="btn-secondary">Conectar</button>
+        </div>
+        <div class="platform-btn" style="cursor:default">
+          <span class="platform-dot" style="background:#1877f2"></span>
+          <span class="flex-1">
+            <strong class="block">Facebook</strong>
+            <span class="muted text-xs">No conectado</span>
+          </span>
+          <button class="btn-secondary">Conectar</button>
+        </div>
+        <div class="platform-btn" style="cursor:default">
+          <span class="platform-dot" style="background:#000"></span>
+          <span class="flex-1">
+            <strong class="block">X (Twitter)</strong>
+            <span class="muted text-xs">No conectado</span>
+          </span>
+          <button class="btn-secondary">Conectar</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ======================================================================
+     SCREEN 11 — SETTINGS: BILLING
+====================================================================== -->
+<section class="screen" data-screen="settings-billing" data-use-shell>
+  <div class="max-w-4xl">
+    <h1 class="text-3xl font-bold mb-2">Plan y facturación</h1>
+    <p class="text-lg muted mb-8">Controla tu plan, créditos y facturación.</p>
+
+    <div class="card p-6 mb-6 bg-gradient-to-br from-brand-900/50 to-neutral-900">
+      <div class="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <span class="chip chip-brand mb-2"><i data-lucide="sparkles" class="w-3 h-3"></i>Plan actual</span>
+          <h2 class="text-3xl font-bold mt-2">Starter BYOK</h2>
+          <div class="muted mt-1">$19/mes · tú traes tu clave de Anthropic</div>
+        </div>
+        <div class="text-right">
+          <div class="text-sm muted">Créditos de render</div>
+          <div class="text-4xl font-extrabold">47 <span class="muted text-lg font-normal">/ 100</span></div>
+          <div class="text-xs muted">Renueva el 1 de mayo</div>
+        </div>
+      </div>
+
+      <div class="mt-6 h-2 rounded-full bg-neutral-800 overflow-hidden">
+        <div class="h-full bg-brand-500" style="width:47%"></div>
+      </div>
+
+      <div class="flex gap-2 mt-6 flex-wrap">
+        <button class="btn-secondary">Comprar más créditos</button>
+        <button class="btn-ghost">Ver uso detallado</button>
+      </div>
+    </div>
+
+    <h3 class="font-bold mb-4">Cambiar de plan</h3>
+    <div class="grid md:grid-cols-3 gap-4 mb-8">
+      <div class="card p-6">
+        <strong class="block text-lg">Starter BYOK</strong>
+        <div class="text-3xl font-extrabold mt-2">$19<span class="muted text-base font-normal">/mes</span></div>
+        <div class="muted text-sm mt-1">Tú traes tu clave</div>
+        <div class="divider"></div>
+        <ul class="space-y-2 text-sm">
+          <li class="flex gap-2"><i data-lucide="check" class="w-4 h-4" style="color:#4ade80"></i>100 renders/mes</li>
+          <li class="flex gap-2"><i data-lucide="check" class="w-4 h-4" style="color:#4ade80"></i>Todas las plataformas</li>
+          <li class="flex gap-2"><i data-lucide="check" class="w-4 h-4" style="color:#4ade80"></i>Sin límite de tokens AI</li>
+        </ul>
+        <button class="btn-secondary w-full mt-5" disabled style="opacity:.55">Tu plan actual</button>
+      </div>
+      <div class="card p-6 border-brand-500 border-2 relative">
+        <span class="chip chip-brand absolute -top-3 left-1/2 -translate-x-1/2">Más popular</span>
+        <strong class="block text-lg">Managed</strong>
+        <div class="text-3xl font-extrabold mt-2">$39<span class="muted text-base font-normal">/mes</span></div>
+        <div class="muted text-sm mt-1">Sin claves, sólo úsalo</div>
+        <div class="divider"></div>
+        <ul class="space-y-2 text-sm">
+          <li class="flex gap-2"><i data-lucide="check" class="w-4 h-4" style="color:#4ade80"></i>300 renders/mes</li>
+          <li class="flex gap-2"><i data-lucide="check" class="w-4 h-4" style="color:#4ade80"></i>Tokens AI incluidos</li>
+          <li class="flex gap-2"><i data-lucide="check" class="w-4 h-4" style="color:#4ade80"></i>Prioridad de cola</li>
+        </ul>
+        <button class="btn-primary w-full mt-5">Cambiar a Managed</button>
+      </div>
+      <div class="card p-6">
+        <strong class="block text-lg">Team</strong>
+        <div class="text-3xl font-extrabold mt-2">$99<span class="muted text-base font-normal">/mes</span></div>
+        <div class="muted text-sm mt-1">Hasta 5 usuarios</div>
+        <div class="divider"></div>
+        <ul class="space-y-2 text-sm">
+          <li class="flex gap-2"><i data-lucide="check" class="w-4 h-4" style="color:#4ade80"></i>1000 renders/mes</li>
+          <li class="flex gap-2"><i data-lucide="check" class="w-4 h-4" style="color:#4ade80"></i>Marca compartida</li>
+          <li class="flex gap-2"><i data-lucide="check" class="w-4 h-4" style="color:#4ade80"></i>Soporte prioritario</li>
+        </ul>
+        <button class="btn-secondary w-full mt-5">Hablar con ventas</button>
+      </div>
+    </div>
+
+    <div class="card p-6">
+      <h3 class="font-bold mb-4">Método de pago</h3>
+      <div class="flex items-center gap-4">
+        <div class="w-14 h-10 rounded-lg bg-neutral-800 flex items-center justify-center"><i data-lucide="credit-card" class="w-5 h-5"></i></div>
+        <div class="flex-1">
+          <strong class="block">Visa que termina en 4242</strong>
+          <span class="muted text-sm">Vence 12/2029</span>
+        </div>
+        <button class="btn-ghost">Actualizar</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ======================================================================
+     SCREEN 14 — SETTINGS · MCP GATEWAY
+====================================================================== -->
+<section class="screen" data-screen="settings-mcp" data-use-shell>
+  <div class="max-w-5xl">
+    <div class="flex items-center gap-3 mb-2 flex-wrap">
+      <h1 class="text-3xl font-bold">MCP Gateway</h1>
+      <span class="chip chip-brand text-xs">Bi-direccional</span>
+    </div>
+    <p class="text-lg muted mb-8 max-w-3xl">Foco puede <strong>leer</strong> contexto de tus otras AIs (MCP cliente) y <strong>exponer</strong> tu memoria a agentes externos que autorices (MCP servidor). Aquí decides qué comparte con quién — con audit log completo y kill switch.</p>
+
+    <!-- Resumen bi-direccional -->
+    <div class="card p-6 mb-4">
+      <h3 class="font-bold text-lg mb-4">Conexiones activas</h3>
+      <div class="grid md:grid-cols-2 gap-4">
+        <!-- Foco lee de otras AIs -->
+        <div class="rounded-xl bg-neutral-900/60 p-4">
+          <div class="flex items-center gap-2 mb-3">
+            <i data-lucide="arrow-down-to-line" class="w-4 h-4 text-green-400"></i>
+            <strong class="text-sm">Foco lee de tus AIs</strong>
+            <span class="chip text-xs ml-auto">3 activos</span>
+          </div>
+          <ul class="space-y-2 text-xs muted">
+            <li class="flex items-center gap-2"><i data-lucide="check" class="w-3 h-3 text-green-400"></i>Claude Desktop · local · todas las sesiones</li>
+            <li class="flex items-center gap-2"><i data-lucide="check" class="w-3 h-3 text-green-400"></i>Cursor · workspace foco/</li>
+            <li class="flex items-center gap-2"><i data-lucide="check" class="w-3 h-3 text-green-400"></i>ChatGPT export · abril 2026</li>
+          </ul>
+        </div>
+        <!-- Foco expone memoria -->
+        <div class="rounded-xl bg-neutral-900/60 p-4">
+          <div class="flex items-center gap-2 mb-3">
+            <i data-lucide="arrow-up-from-line" class="w-4 h-4 text-brand-300"></i>
+            <strong class="text-sm">Otras AIs leen de Foco</strong>
+            <span class="chip text-xs ml-auto">1 activo</span>
+          </div>
+          <ul class="space-y-2 text-xs muted">
+            <li class="flex items-center gap-2"><i data-lucide="check" class="w-3 h-3 text-brand-300"></i>Claude Desktop · scope: brand + aprendizajes</li>
+            <li class="flex items-center gap-2"><i data-lucide="circle" class="w-3 h-3 muted"></i>Sin otros agentes autorizados</li>
+          </ul>
+        </div>
+      </div>
+      <div class="flex gap-2 flex-wrap mt-4">
+        <button class="btn-secondary"><i data-lucide="plus" class="w-4 h-4"></i>Autorizar nuevo agente</button>
+        <button class="btn-ghost"><i data-lucide="plug-2" class="w-4 h-4"></i>Conectar nueva AI</button>
+      </div>
+    </div>
+
+    <!-- Scopes -->
+    <div class="card p-6 mb-4">
+      <h3 class="font-bold text-lg mb-1">¿Qué comparte Foco como servidor MCP?</h3>
+      <p class="muted text-sm mb-4 max-w-3xl">Defaults conservadores. Las conversaciones importadas de otras AIs <strong>nunca</strong> se re-exponen — regla dura del sistema, no editable.</p>
+      <div class="space-y-2">
+        <label class="flex items-center justify-between gap-4 p-3 rounded-xl bg-neutral-900/40 cursor-pointer">
+          <div class="flex items-center gap-3">
+            <i data-lucide="sparkles" class="w-4 h-4 text-brand-400"></i>
+            <div>
+              <strong class="text-sm">Aprendizajes del agente</strong>
+              <span class="muted text-xs block">Tono, audiencia, patrones de éxito (6 items)</span>
+            </div>
+          </div>
+          <div class="relative w-12 h-7 rounded-full bg-brand-600 shrink-0">
+            <span class="absolute top-0.5 right-0.5 w-6 h-6 rounded-full bg-white"></span>
+          </div>
+        </label>
+        <label class="flex items-center justify-between gap-4 p-3 rounded-xl bg-neutral-900/40 cursor-pointer">
+          <div class="flex items-center gap-3">
+            <i data-lucide="palette" class="w-4 h-4 text-brand-400"></i>
+            <div>
+              <strong class="text-sm">Identidad de marca</strong>
+              <span class="muted text-xs block">Logo, paleta, tipografía, voz, manual (público)</span>
+            </div>
+          </div>
+          <div class="relative w-12 h-7 rounded-full bg-brand-600 shrink-0">
+            <span class="absolute top-0.5 right-0.5 w-6 h-6 rounded-full bg-white"></span>
+          </div>
+        </label>
+        <label class="flex items-center justify-between gap-4 p-3 rounded-xl bg-neutral-900/40 cursor-pointer">
+          <div class="flex items-center gap-3">
+            <i data-lucide="file-text" class="w-4 h-4 text-amber-400"></i>
+            <div>
+              <strong class="text-sm">Documentos subidos</strong>
+              <span class="muted text-xs block">PDF, Docs, notas (9 items) — contiene info sensible</span>
+            </div>
+          </div>
+          <div class="relative w-12 h-7 rounded-full bg-neutral-800 shrink-0">
+            <span class="absolute top-0.5 left-0.5 w-6 h-6 rounded-full bg-neutral-600"></span>
+          </div>
+        </label>
+        <label class="flex items-center justify-between gap-4 p-3 rounded-xl bg-neutral-900/40 cursor-pointer">
+          <div class="flex items-center gap-3">
+            <i data-lucide="github" class="w-4 h-4 muted"></i>
+            <div>
+              <strong class="text-sm">Repos de GitHub</strong>
+              <span class="muted text-xs block">Código y README — puede incluir secretos</span>
+            </div>
+          </div>
+          <div class="relative w-12 h-7 rounded-full bg-neutral-800 shrink-0">
+            <span class="absolute top-0.5 left-0.5 w-6 h-6 rounded-full bg-neutral-600"></span>
+          </div>
+        </label>
+        <label class="flex items-center justify-between gap-4 p-3 rounded-xl bg-neutral-900/40 cursor-pointer">
+          <div class="flex items-center gap-3">
+            <i data-lucide="at-sign" class="w-4 h-4 muted"></i>
+            <div>
+              <strong class="text-sm">Posts de redes sociales</strong>
+              <span class="muted text-xs block">YouTube, TikTok, LinkedIn, IG, X, FB — todo es público</span>
+            </div>
+          </div>
+          <div class="relative w-12 h-7 rounded-full bg-brand-600 shrink-0">
+            <span class="absolute top-0.5 right-0.5 w-6 h-6 rounded-full bg-white"></span>
+          </div>
+        </label>
+        <label class="flex items-center justify-between gap-4 p-3 rounded-xl bg-neutral-900/40 opacity-80" title="Bloqueado por el sistema">
+          <div class="flex items-center gap-3">
+            <i data-lucide="messages-square" class="w-4 h-4" style="color:#f87171"></i>
+            <div>
+              <strong class="text-sm">Conversaciones importadas de otras AIs</strong>
+              <span class="muted text-xs block">Nunca se re-exponen por MCP. Siempre apagado.</span>
+            </div>
+          </div>
+          <div class="flex items-center gap-2 shrink-0">
+            <i data-lucide="lock" class="w-3 h-3 muted"></i>
+            <div class="relative w-12 h-7 rounded-full bg-neutral-800 opacity-50">
+              <span class="absolute top-0.5 left-0.5 w-6 h-6 rounded-full bg-neutral-600"></span>
+            </div>
+          </div>
+        </label>
+      </div>
+    </div>
+
+    <!-- Audit log -->
+    <div class="card p-6 mb-4">
+      <div class="flex items-center justify-between mb-3 flex-wrap gap-3">
+        <div>
+          <h3 class="font-bold text-lg">Audit log</h3>
+          <p class="muted text-sm">Registro sincrónico de cada lectura y escritura. 7 días visibles aquí, exportable completo.</p>
+        </div>
+        <div class="flex gap-2">
+          <button class="btn-ghost"><i data-lucide="download" class="w-4 h-4"></i>Exportar log</button>
+        </div>
+      </div>
+      <div class="rounded-xl bg-neutral-950 border border-neutral-800 p-4">
+        <ul class="space-y-2 text-xs muted font-mono">
+          <li class="flex gap-3">
+            <span class="muted">17/04 09:22</span>
+            <span>Claude Desktop leyó <strong class="text-brand-300">brand.voice</strong> + 3 aprendizajes</span>
+          </li>
+          <li class="flex gap-3">
+            <span class="muted">17/04 08:10</span>
+            <span>Foco ingirió 12 mensajes de <strong class="text-brand-300">Cursor MCP</strong></span>
+          </li>
+          <li class="flex gap-3">
+            <span class="muted">16/04 19:45</span>
+            <span>Claude Desktop leyó <strong class="text-brand-300">posts.linkedin.recientes</strong></span>
+          </li>
+          <li class="flex gap-3">
+            <span class="muted">16/04 14:03</span>
+            <span>Bloqueado: intento de lectura desde <strong style="color:#f87171">agente_desconocido</strong></span>
+          </li>
+          <li class="flex gap-3">
+            <span class="muted">15/04 22:08</span>
+            <span>Claude Desktop leyó <strong class="text-brand-300">brand.paleta</strong></span>
+          </li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- Zona delicada MCP -->
+    <div class="card p-6 border-rose-900 border">
+      <div class="flex items-center gap-3 mb-3">
+        <i data-lucide="triangle-alert" class="w-6 h-6" style="color:#f87171"></i>
+        <h3 class="font-bold text-lg">Zona delicada</h3>
+      </div>
+      <p class="muted mb-4 text-sm">Acciones que afectan inmediatamente el acceso externo a tu memoria. Rotar la API key invalida todas las integraciones que la usan. Desactivar el servidor corta el acceso de cualquier agente externo al instante.</p>
+      <div class="flex gap-2 flex-wrap">
+        <button class="btn-secondary" style="border-color:#7f1d1d;color:#fca5a5"><i data-lucide="key" class="w-4 h-4"></i>Rotar API key</button>
+        <button class="btn-secondary" style="border-color:#7f1d1d;color:#fca5a5"><i data-lucide="unplug" class="w-4 h-4"></i>Desactivar MCP servidor</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ======================================================================
+     SCREEN 12 — HELP
+====================================================================== -->
+<section class="screen" data-screen="help" data-use-shell>
+  <div class="max-w-4xl">
+    <h1 class="text-3xl font-bold mb-2">Ayuda</h1>
+    <p class="text-lg muted mb-8">Todo lo que necesitas para usar Foco sin fricción. Y si algo no te queda claro, escríbenos.</p>
+
+    <div class="grid md:grid-cols-2 gap-4 mb-8">
+      <div class="card p-6 cursor-pointer hover:border-brand-500">
+        <i data-lucide="rocket" class="w-8 h-8 mb-3 text-brand-400"></i>
+        <strong class="block text-lg mb-1">Empieza aquí</strong>
+        <span class="muted">Tu primer video en 5 minutos, paso a paso.</span>
+      </div>
+      <div class="card p-6 cursor-pointer hover:border-brand-500">
+        <i data-lucide="book-open" class="w-8 h-8 mb-3 text-brand-400"></i>
+        <strong class="block text-lg mb-1">Glosario</strong>
+        <span class="muted">BYOK, word-level captions, face-cam, avatar… todo explicado claro.</span>
+      </div>
+      <div class="card p-6 cursor-pointer hover:border-brand-500">
+        <i data-lucide="video" class="w-8 h-8 mb-3 text-brand-400"></i>
+        <strong class="block text-lg mb-1">Videotutoriales</strong>
+        <span class="muted">12 videos cortos que cubren todas las funciones.</span>
+      </div>
+      <div class="card p-6 cursor-pointer hover:border-brand-500">
+        <i data-lucide="message-square" class="w-8 h-8 mb-3 text-brand-400"></i>
+        <strong class="block text-lg mb-1">Escríbenos</strong>
+        <span class="muted">Respondemos en menos de 4h de lunes a viernes.</span>
+      </div>
+    </div>
+
+    <h3 class="font-bold mb-4">Preguntas frecuentes</h3>
+    <div class="space-y-2">
+      <details class="card p-4"><summary class="cursor-pointer font-semibold">¿Qué es BYOK y por qué me conviene?</summary><p class="mt-3 muted">Trae Tu Propia Clave. Pagas directo a Anthropic los tokens y Foco te cobra sólo por el producto. Ahorras típicamente 40-60%.</p></details>
+      <details class="card p-4"><summary class="cursor-pointer font-semibold">¿Mis fotos y voz son privadas?</summary><p class="mt-3 muted">Sí. Nunca las usamos para entrenar modelos de terceros. Puedes borrarlas desde Ajustes → Marca en cualquier momento.</p></details>
+      <details class="card p-4"><summary class="cursor-pointer font-semibold">¿Puedo usar Foco gratis?</summary><p class="mt-3 muted">Te damos 3 renders de prueba al registrarte, sin pedirte tarjeta.</p></details>
+    </div>
+  </div>
+</section>
+
+<!-- ======================================================================
+     SCRIPT — navigation + nav drawer + theme toggle
+====================================================================== -->
+<script>
+(function(){
+  const screens = [
+    { id: 'onboarding',              label: '1 · Onboarding · bienvenida',    group: 'Onboarding' },
+    { id: 'onboarding-2',            label: '1b · Subir fotos para avatar',   group: 'Onboarding' },
+    { id: 'onboarding-3',            label: '1c · Conectar redes',            group: 'Onboarding' },
+    { id: 'dashboard',               label: '2 · Dashboard (inicio)',         group: 'App' },
+    { id: 'create-1',                label: '3 · Crear · paso 1 (idea)',      group: 'Flujo crear' },
+    { id: 'create-2',                label: '4 · Crear · paso 2 (guion+voz)', group: 'Flujo crear' },
+    { id: 'create-3',                label: '5 · Crear · paso 3 (avatar)',    group: 'Flujo crear' },
+    { id: 'editor',                  label: '6 · Editor / preview',           group: 'Flujo crear' },
+    { id: 'publish',                 label: '7 · Publicar',                   group: 'Flujo crear' },
+    { id: 'library',                 label: '8 · Biblioteca',                 group: 'App' },
+    { id: 'memory',                  label: '13 · Memoria (contexto)',        group: 'App' },
+    { id: 'settings-brand',          label: '9 · Ajustes · marca',            group: 'Ajustes' },
+    { id: 'settings-integrations',   label: '10 · Ajustes · claves y redes',  group: 'Ajustes' },
+    { id: 'settings-mcp',            label: '14 · Ajustes · MCP Gateway',     group: 'Ajustes' },
+    { id: 'settings-billing',        label: '11 · Ajustes · plan y cobro',    group: 'Ajustes' },
+    { id: 'help',                    label: '12 · Ajustes · ayuda y soporte', group: 'Ajustes' },
+  ];
+
+  // Build nav drawer
+  const navItems = document.getElementById('navItems');
+  let currentGroup = '';
+  screens.forEach(s => {
+    if (s.group !== currentGroup) {
+      currentGroup = s.group;
+      const h = document.createElement('div');
+      h.className = 'muted text-xs font-bold uppercase tracking-wider mt-3 mb-1 px-2';
+      h.textContent = s.group;
+      navItems.appendChild(h);
+    }
+    const a = document.createElement('a');
+    a.className = 'nav-item';
+    a.dataset.navTo = s.id;
+    a.innerHTML = `<i data-lucide="file" class="w-4 h-4"></i><span>${s.label}</span>`;
+    navItems.appendChild(a);
+  });
+
+  // Shell injection
+  const shellTpl = document.getElementById('shellTemplate').innerHTML;
+  document.querySelectorAll('[data-use-shell]').forEach(section => {
+    const originalHTML = section.innerHTML;
+    section.innerHTML = shellTpl;
+    section.querySelector('[data-slot]').innerHTML = originalHTML;
+  });
+
+  // Navigation
+  function goTo(id) {
+    document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+    const target = document.querySelector(`[data-screen="${id}"]`);
+    if (target) target.classList.add('active');
+
+    document.querySelectorAll('.nav-item').forEach(n => n.classList.toggle('active', n.dataset.navTo === id));
+    document.querySelectorAll('.sidebar-item').forEach(n => n.classList.toggle('active', n.dataset.navTo === id));
+
+    window.location.hash = id;
+    lucide.createIcons();
+    window.scrollTo(0, 0);
+  }
+
+  document.addEventListener('click', (e) => {
+    const el = e.target.closest('[data-nav-to]');
+    if (!el) return;
+    e.preventDefault();
+    goTo(el.dataset.navTo);
+  });
+
+  // Initial route
+  const initial = (window.location.hash || '#onboarding').slice(1);
+  goTo(initial);
+
+  // Drawer toggle
+  document.getElementById('drawerToggle').addEventListener('click', () => {
+    document.getElementById('navDrawer').classList.toggle('collapsed');
+  });
+
+  // Theme toggle
+  document.getElementById('themeToggle').addEventListener('click', () => {
+    document.body.classList.toggle('dark');
+  });
+
+  // Icons
+  lucide.createIcons();
+})();
+</script>
+
+</body>
+</html>
