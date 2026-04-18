@@ -71,9 +71,10 @@ Set in `memory/feedback_foco_quality.md`. Highlights:
 - [x] `pnpm install` clean, `pnpm audit` 0 vulnerabilities
 - [x] `git init` done
 - [x] First commit + pushed to `Chisu-io/foco` (public)
-- [ ] First CI run green
-- [ ] ESLint flat config
-- [ ] First module: port `_pipeline/` utilities → `@chisu/media-primitives`
+- [x] ESLint 9 flat config (type-aware, strict)
+- [x] Vitest wired at workspace root
+- [x] First CI run green (format + lint + typecheck + test + build)
+- [ ] `@chisu/render-engine` POC: 3s 9:16 MP4 con captions word-level (de-risk engine + caption sync)
 - [ ] `foco.chisu.io` DNS → Vercel landing
 - [ ] Episode 01 recorded
 
