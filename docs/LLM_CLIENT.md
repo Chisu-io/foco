@@ -1,9 +1,9 @@
 ---
-title: Foco · LLM_CLIENT v0.1
-status: DRAFT v0.1 (pendiente de peer review + firma)
+title: Foco · LLM_CLIENT v0.2
+status: DRAFT v0.2 (pendiente de segundo peer review + firma)
 date: 2026-04-18
 owner: Jean Pierre Rojas
-reviewer: Jean + AI peer review externo
+reviewer: Jean + AI peer review externo (primera pasada aplicada)
 depends_on:
   - docs/UX_FROZEN.md (v1.3)
   - docs/INGEST_SECURITY.md (v1.0)
@@ -15,9 +15,18 @@ changelog:
     envelope encryption de keys, validación, taxonomía de errores,
     token accounting, providers MVP (Anthropic + OpenAI),
     observabilidad, audit, SLOs y testing. No firmado.
+  - v0.2 (2026-04-18): aplica 6 cambios del primer peer review
+    externo. KEK por shard de ~1000 usuarios (no por usuario);
+    KMS vendor cerrado = AWS KMS. Retry con jitter ante
+    `kms_unavailable` + métrica separada. Cache in-process
+    TTL 5min (antes "zero caching" era demasiado estricto).
+    Idempotency corrige semántica (no garantiza output textual
+    idéntico). Token accounting BYOK explicita razonamiento.
+    Circuit breaker thresholds migran a flags GrowthBook.
+    Pendiente segundo peer review (scope: diff v0.1→v0.2) + firma.
 ---
 
-# Foco · LLM_CLIENT v0.1
+# Foco · LLM_CLIENT v0.2
 
 > **Principio rector.** Foco trata a cada llamada a un LLM como un
 > **evento facturable con superficie de ataque**. Nunca hay plaintext
@@ -92,10 +101,18 @@ con invariantes de seguridad que nunca deben depender del plan.
 4. **Plan-aware routing decidido en un punto**. Un caller jamás sabe
    si la llamada será BYOK o Managed; sólo invoca
    `llmClient.call(userId, request)`. La decisión es interna.
-5. **Fail-closed**. Si (a) KMS no responde, (b) la key del usuario
-   es inválida/sin cuota y no hay fallback, o (c) el feature-flag
-   `llm_routing_enabled` está OFF, la llamada devuelve error
-   estructurado sin nunca intentar una vía degradada silenciosa.
+5. **Fail-closed con retry acotado**. Ante fallo transitorio de
+   KMS (`kms_unavailable { transient: true }`) el cliente hace **1
+   retry con jitter aleatorio 50–250ms** antes de fallar; si el
+   segundo intento también falla, devuelve error estructurado sin
+   vía degradada silenciosa. Para (a) key inválida/sin cuota sin
+   fallback, (b) feature-flag `llm_routing_enabled` OFF, o (c)
+   `kms_unavailable { transient: false }` (ej. ciphertext
+   inválido), el fallo es inmediato sin retry. En ningún caso el
+   cliente intenta una vía degradada silenciosa (ej. usar pool de
+   Foco sin `preferMyKey` explícito). La métrica
+   `llm_kms_induced_failures_total` aísla fallos imputables a KMS
+   de fallos del proveedor LLM.
 6. **Token accounting para todos**, no sólo Managed. En BYOK
    contamos tokens para UI de uso en `settings-integraciones`,
    detección de abuso, y analytics — no para billing.
@@ -105,8 +122,17 @@ con invariantes de seguridad que nunca deben depender del plan.
    bloquea indefinidamente.
 8. **Scope mínimo en las keys de usuario**. La key BYOK solo se
    descifra dentro del proceso worker que hace la llamada. Zero IPC
-   con otros workers con ella en claro. Zero caching en memoria
-   global compartida. TTL en memoria <60s.
+   con otros workers con ella en claro. **Se permite caching
+   in-process por worker** con TTL ≤5 min y zeroización al
+   eviction, pero **se prohíbe**: cache en store distribuida
+   (Redis, Memcached), serialización a disco o snapshot, y
+   cualquier transmisión fuera del proceso. El cache es
+   thread-local o per-event-loop, nunca global compartido.
+   **Threat model explícito**: un worker comprometido puede
+   exfiltrar keys de sus usuarios activos durante una ventana
+   ≤5min (el TTL acota el radio); un compromiso de Redis, disco,
+   DB replica o dump NO expone keys en claro en ningún momento
+   (porque nunca viven ahí).
 9. **Keys jamás se exportan vía DSR**. En un export de GDPR/CCPA, el
    usuario recibe `llmKeyProvider` y `llmKeyStatus` pero no la key
    (porque Foco nunca puede leerla en claro bajo demanda legal).
@@ -344,16 +370,37 @@ métrica `llm_circuit_state{provider="anthropic"|"openai"}`.
 
 ### 4.3 Idempotency y retries
 
-Si el caller proporciona `idempotencyKey`, `LLMClient` cachea el
-resultado por 10min en Redis (cluster regional de Upstash) y
-devuelve el mismo `LLMCallOutput` a reintento. Sin
-`idempotencyKey`, cada `.call()` es un request nuevo.
+Si el caller proporciona `idempotencyKey`, `LLMClient` persiste el
+resultado del primer intento en Redis (cluster regional de Upstash)
+por 10min y lo devuelve tal cual en reintentos con la misma key.
+Sin `idempotencyKey`, cada `.call()` es un request nuevo.
 
-Retries internos del cliente:
-- Solo para errores `network_error { transient: true }` y
-  `rate_limit` con backoff exponencial (1s, 2s, 4s; máx 3 intentos).
-- **Nunca reintentamos** `invalid_key`, `quota_exhausted`,
-  `content_blocked`, `context_too_long`, `kms_unavailable { transient: false }`.
+**Semántica precisa de la idempotency** (corregida tras peer
+review): garantiza que **no se duplican side-effects** (billing de
+tokens, audit entries, incremento de cuotas, llamada facturable al
+proveedor). **No garantiza determinismo del output textual** del
+LLM, porque los modelos generativos no son determinísticos aunque
+reciban el mismo input (ni Anthropic ni OpenAI prometen
+determinismo contractual, ni siquiera con `temperature=0`).
+
+Consecuencia operacional: si el caller invoca `.call()` con
+idempotencyKey K y recibe output O1, una re-invocación con la
+misma K devuelve O1 (servido del cache). Pero si la primera call
+falla post-timeout **antes de escribir el cache** y el caller
+reintenta sin idempotencyKey, **puede obtener O2 ≠ O1** — eso no
+es un bug, es la naturaleza del modelo generativo. Los consumidores
+del cliente deben documentarlo en sus propios contratos si O1
+ya era observado externamente.
+
+Retries internos del cliente (distintos de idempotency):
+- Para `network_error { transient: true }` y `rate_limit` con
+  backoff exponencial (1s, 2s, 4s; máx 3 intentos).
+- Para `kms_unavailable { transient: true }`: 1 retry con jitter
+  50–250ms (ver §2 invariante 5).
+- **Nunca reintentamos**: `invalid_key`, `quota_exhausted`,
+  `content_blocked`, `context_too_long`,
+  `kms_unavailable { transient: false }`, `plan_requires_key`,
+  `routing_disabled`.
 
 ## 5 · Envelope encryption de keys BYOK
 
@@ -361,11 +408,18 @@ Retries internos del cliente:
 
 Dos niveles:
 
-- **KEK (Key Encryption Key)**: una por tenant (= `userId` en
-  MVP single-tenant-por-usuario). Vive en KMS (AWS KMS o Supabase
-  Vault — ver §5.2). Nunca sale del HSM en claro. Se invoca para
+- **KEK (Key Encryption Key)**: **una por shard** de ~1.000
+  usuarios (asignación determinística:
+  `shardId = hash(userId) mod N`, con N dimensionado para mantener
+  ~1k users/shard). Vive en **AWS KMS** (decisión cerrada v0.2,
+  ver §5.2). Nunca sale del HSM en claro. Se invoca para
   operaciones `Encrypt` / `Decrypt` sobre DEKs; nunca sobre la key
-  de usuario directamente.
+  de usuario directamente. **Rationale de shard**: KEK por usuario
+  individual implica ~$1/user/mes en KMS fijo + ops, insostenible
+  a volumen Free/Creator. KEK por shard amortiza el fijo a
+  ~$0.001/user manteniendo blast radius acotado (un KEK
+  comprometido = re-wrap de ~1k users, no toda la plataforma).
+  Ver cálculo explícito en §5.2.
 - **DEK (Data Encryption Key)**: generada aleatoriamente (AES-256
   via `crypto.randomBytes(32)`) cada vez que el usuario *agrega* o
   *rota* su key BYOK. Cifra la key del proveedor con AES-256-GCM.
@@ -380,11 +434,12 @@ Flujo al **agregar** una key BYOK:
 3. Edge genera DEK = randomBytes(32).
 4. Edge cifra key_plaintext con DEK (AES-256-GCM, nonce aleatorio).
    -> { ciphertext, nonce, authTag }
-5. Edge pide a KMS: Encrypt(kekAlias=`foco/kek/${userId}`, DEK).
+5. Edge calcula `shardId = hash(userId) mod N` y pide a KMS:
+   Encrypt(kekAlias=`foco/kek/shard-${shardId}`, DEK).
    -> { dekCiphertext, kekVersion }
 6. DB insert a `user_llm_key`:
    {
-     userId, provider, keyCiphertext, keyNonce, keyAuthTag,
+     userId, shardId, provider, keyCiphertext, keyNonce, keyAuthTag,
      dekCiphertext, kekVersion,
      maskedHint: 'sk-ant-...xY7q',  // últimos 4 chars para UI
      status: 'pending_validation',
@@ -398,25 +453,31 @@ Flujo al **agregar** una key BYOK:
 Flujo al **leer** una key en runtime (dentro de `LLMClient.call()`):
 
 ```
-1. Worker fetch de row `user_llm_key` por userId.
-2. Worker pide a KMS: Decrypt(kekAlias=`foco/kek/${userId}`,
-   dekCiphertext, kekVersion) -> DEK.
-3. Worker descifra keyCiphertext con DEK -> key_plaintext.
-4. Worker usa key_plaintext UNA vez (en el request HTTP a Anthropic
-   u OpenAI), y zeroiza inmediatamente.
-5. DEK y key_plaintext tienen TTL <60s en memoria del proceso.
-   Zeroización con `buffer.fill(0)` + `Buffer.alloc(0)` sobre el
-   buffer original.
+1. Worker fetch de row `user_llm_key` por userId (incluye shardId).
+2. Worker consulta cache in-process (`dek_cache`) con key=userId.
+   Hit: salta al paso 4 con DEK del cache. Miss: pide a KMS.
+3. Worker pide a KMS: Decrypt(
+     kekAlias=`foco/kek/shard-${shardId}`,
+     dekCiphertext, kekVersion
+   ) -> DEK. Si KMS falla con error transitorio, 1 retry con
+   jitter 50–250ms (ver §2 invariante 5). Si falla otra vez,
+   fail-closed con `kms_unavailable`.
+4. Worker descifra keyCiphertext con DEK -> key_plaintext.
+5. Worker usa key_plaintext durante el request HTTP al proveedor;
+   al cerrar el request, zeroiza key_plaintext con `buffer.fill(0)`
+   sobre el buffer original.
+6. DEK permanece en cache in-process del worker con TTL ≤5 min
+   (configurable vía flag `llm.dek_cache.ttl_seconds`, default
+   300). Al eviction, se zeroiza también. El cache NO es
+   distribuido, NO se serializa, NO cruza procesos. Ver §2
+   invariante 8 para el threat model.
 ```
 
 ### 5.2 KMS selection
 
-Decisión de v0.1 (**abierta** para peer review):
-
-**Recomendación primaria: AWS KMS** con alias
-`alias/foco/kek/user-${userId}` y política IAM restringida al rol
-del worker que hace la llamada (`role/foco-llm-client-worker`).
-Justificación:
+**Decisión cerrada v0.2: AWS KMS**, con alias
+`alias/foco/kek/shard-${shardId}` y política IAM restringida al rol
+`role/foco-llm-client-worker`. Justificación:
 
 - FIPS 140-2 Level 2 (HSM certificado).
 - `CreateKey` + `ScheduleKeyDeletion` + audit CloudTrail maduro.
@@ -425,17 +486,27 @@ Justificación:
 - Integración con KMS Condition Keys para requerir VPC endpoint
   (evita leaks sobre internet público).
 
-**Alternativa considerada: Supabase Vault**. Razones para considerarla:
-el stack ya incluye Supabase (Postgres + Auth), sería cero-nuevo-
-vendor. Razones en contra: Supabase Vault no provee rotación
-automática ni attestation HSM; su threat model asume adversary con
-Postgres superuser puede leer (lo que rompe nuestro principio 3).
+**Cálculo de costo con KEK por shard** (cerrado en primer peer
+review). Asumiendo $1/KEK/mes + $0.03 por 10k ops Encrypt/Decrypt y
+N = 1 KEK por cada 1.000 usuarios activos; volumen estimado 100
+calls/usuario/día × 30 días = 3.000 ops/usuario/mes antes de cache:
 
-**Decisión provisional**: AWS KMS para producción, Supabase Vault
-solo aceptable para MVP pre-launch si el presupuesto no cubre KMS
-($1/KEK/mes × N usuarios). **Punto abierto**: calcular break-even
-aproximado con 1000 usuarios (KMS = $1000/mes) vs costo implícito
-de rotación manual en Supabase Vault.
+| Usuarios | KEKs | Fijo KEK | Ops/mes (sin cache) | Costo ops | Total/mes | Por usuario |
+|----------|------|----------|---------------------|-----------|-----------|-------------|
+| 1.000    | 1    | $1       | 3M                  | $9        | $10       | $0.010      |
+| 10.000   | 10   | $10      | 30M                 | $90       | $100      | $0.010      |
+| 100.000  | 100  | $100     | 300M                | $900      | $1.000    | $0.010      |
+
+Comparativa: KEK por usuario individual escalaría a ~$1.009/usuario
+(tres órdenes de magnitud más caro). Cache in-process de DEK (§2
+invariante 8) reduce ops/mes entre ×10 y ×100 según hit rate,
+dejando el costo operativo real muy por debajo de $0.010/usuario.
+
+**Alternativa descartada: Supabase Vault**. Motivo: no provee
+rotación automática ni attestation HSM; su threat model asume
+adversary con Postgres superuser puede leer (lo que rompe
+invariante 3). El ahorro hipotético no justifica el debilitamiento
+criptográfico.
 
 ### 5.3 Rotación y revocación
 
@@ -518,7 +589,8 @@ estado, UI push vía Supabase Realtime + email notificación.
 | HTTP 400 content filter / policy     | `content_blocked`          |
 | TCP / DNS / TLS error                | `network_error { transient: true }` |
 | Timeout (>60s total)                 | `network_error { transient: true }` |
-| KMS API error                        | `kms_unavailable`          |
+| KMS API error (5xx, throttle)        | `kms_unavailable { transient: true }`, 1 retry con jitter (§2 inv. 5) |
+| KMS `InvalidCiphertextException`     | `kms_unavailable { transient: false }`, no retry |
 | Feature flag `llm_routing_enabled`=off | `routing_disabled`       |
 | Free/Creator sin key                 | `plan_requires_key`        |
 | Caso no mapeado                      | `internal`                 |
@@ -549,6 +621,31 @@ Nunca `keyCiphertext`, `keyNonce`, `traceparent` completo,
 contenido del prompt, ni response body del proveedor.
 
 ## 8 · Token accounting
+
+**Por qué contamos tokens también en BYOK (no solo en Managed).**
+Aunque Free/Creator pagan su propio LLM vía BYOK, Foco cuenta
+tokens en todos los planes por tres razones **explícitas y
+declaradas al usuario** (Privacy Policy + texto de consentimiento
+en `settings-integraciones`):
+
+1. **UI de uso**: el usuario ve su consumo mensual en
+   `settings-integraciones` → "Uso de IA" (sparkline + totales por
+   origen). Es transparencia sobre cuánto está gastando en su
+   propia cuenta del proveedor.
+2. **Detección de abuso**: heurísticas de §8.3 previenen
+   distilación de modelo, scraping sistemático y otros usos fuera
+   de Términos de Servicio de Foco (que el usuario acepta al
+   registrarse).
+3. **Analytics de producto**: distribución agregada de `origin`
+   (asistente vs generación vs MCP) informa priorización de
+   features. Los datos son agregados y anonimizados; no se
+   correlacionan con identidad fuera del equipo de producto.
+
+**Nunca** se usa el conteo BYOK para billing directo al usuario.
+Es consentimiento informado, no tracking encubierto. Esta posición
+está publicada en Privacy Policy (en construcción) y reforzada en
+el consent modal de `settings-integraciones` cuando el usuario
+agrega su primera key.
 
 ### 8.1 Contadores por request
 
@@ -692,13 +789,18 @@ cualquier contenido de prompt/response bodies.
 ### 10.2 Métricas (Mimir via OTel)
 
 ```
-llm_calls_total{provider, funding_mode, origin, status}  counter
-llm_latency_ms{provider, model}                          histogram
-llm_tokens_total{provider, model, direction=in|out}      counter
-llm_errors_total{provider, kind}                         counter
-llm_circuit_state{provider}                              gauge (0|1|2)
-llm_kms_latency_ms{operation=encrypt|decrypt}            histogram
-llm_key_invalidations_total{provider, reason}            counter
+llm_calls_total{provider, funding_mode, origin, status}       counter
+llm_latency_ms{provider, model}                               histogram
+llm_tokens_total{provider, model, direction=in|out}           counter
+llm_errors_total{provider, kind}                              counter
+llm_circuit_state{provider}                                   gauge (0|1|2)
+llm_kms_latency_ms{operation=encrypt|decrypt}                 histogram
+llm_kms_induced_failures_total{operation, transient}          counter
+llm_kms_retries_total{operation, outcome=success|fail}        counter
+llm_key_invalidations_total{provider, reason}                 counter
+llm_dek_cache_hits_total{worker}                              counter
+llm_dek_cache_misses_total{worker}                            counter
+llm_dek_cache_evictions_total{worker, reason=ttl|manual}      counter
 ```
 
 ### 10.3 Logs (pino → Loki)
@@ -787,7 +889,8 @@ lo computa en lectura.
 
 | Fallo                                  | Comportamiento esperado                                |
 |----------------------------------------|--------------------------------------------------------|
-| KMS region down                        | `kms_unavailable { transient: true }`, retry interno  |
+| KMS throttle / 5xx transitorio         | `kms_unavailable { transient: true }`, 1 retry con jitter, luego fail-closed |
+| KMS region down prolongado             | Retries agotados → circuit KMS abre, modal P1, cache in-process sirve hits mientras dure el TTL |
 | Postgres `user_llm_key` lectura falla  | `internal` error, sin fallback a pool                 |
 | Redis idempotency down                 | Degrada a sin-idempotency, log warn                   |
 | Provider primario circuit abierto      | Usa fallback según matriz §4.1                        |
@@ -877,24 +980,55 @@ it('redacts API keys from log messages', () => {
 
 ## 16 · Decisiones abiertas / Pendiente de aprobación
 
-1. **AWS KMS vs Supabase Vault** para KEK pool (§5.2). Pendiente
-   de cálculo break-even de costo con 1000 usuarios.
-2. **Gestión de caso "Free/Creator sin key"**: ¿bloquear generación
+### Cerradas en v0.2 (ya no requieren decisión)
+
+- ✅ **KMS vendor**: AWS KMS con KEK por shard (§5.2). Cerrada tras
+  primer peer review y cálculo de costo explícito.
+- ✅ **Circuit breaker y retry thresholds**: migrados a feature
+  flags en GrowthBook (tabla abajo), no hardcoded. Cerrada.
+
+### Aún abiertas
+
+1. **Trial para Free/Creator sin key**: ¿bloquear generación
    totalmente, o permitir un *generous trial* del pool Foco por
    tiempo limitado (ej. primeras 10 generaciones)? Jean decide.
-3. **Respuesta a `content_blocked`**: ¿mostrar al usuario la razón
+2. **Respuesta a `content_blocked`**: ¿mostrar al usuario la razón
    del bloqueo (más útil para refinar) o mensaje genérico (menos
    bypass-friendly)? Recomendación Claude: genérico.
-4. **Nombres `gpt-5` / `gpt-5-mini`**: placeholders hasta lanzar.
+3. **Nombres `gpt-5` / `gpt-5-mini`**: placeholders hasta lanzar.
    Actualizar tabla §9 cuando OpenAI publique modelos finales.
-5. **Retry budget por usuario por hora**. Define umbrales exactos.
-6. **Exposición de `providerUsed` al usuario**. ¿Mostrar en UI que
-   su request fue routed a Anthropic vs OpenAI, o es detalle
-   interno? Recomendación: mostrar (transparencia radical).
-7. **Detección de abuso §8.3 — umbrales**: 10k tokens/hora × 3h es
-   placeholder. Calibrar con datos reales post-launch.
-8. **Política de retención de `llm_token_usage`**: ¿90 días? ¿1
+4. **Exposición de `providerUsed` al usuario** en UI: ¿mostrar que
+   el request fue routed a Anthropic vs OpenAI, o dejarlo interno?
+   Recomendación Claude: mostrar (transparencia radical).
+5. **Umbrales iniciales de abuso §8.3**: `10k tokens/hora × 3h` es
+   placeholder. Calibrar con datos reales post-launch. Los valores
+   viven en GrowthBook (tabla abajo); requieren decisión inicial.
+6. **Política de retención de `llm_token_usage`**: ¿90 días? ¿1
    año? Depende de necesidades de analytics vs costo Postgres.
+
+### Feature flags expuestos en GrowthBook
+
+Los siguientes valores son **configuración runtime** (no constantes
+de código) y viven en GrowthBook con defaults conservadores;
+requieren cambio de flag (auditable, versionado) para ajustar.
+Migración a flags cerrada en v0.2 — los valores de la tabla son
+los defaults iniciales, no decisiones abiertas:
+
+| Flag                                            | Default | Descripción |
+|-------------------------------------------------|---------|-------------|
+| `llm.circuit_breaker.error_threshold`           | `0.30`  | Error rate para abrir circuito (0–1) |
+| `llm.circuit_breaker.volume_threshold`          | `20`    | Mínimo de requests en ventana para evaluar |
+| `llm.circuit_breaker.window_seconds`            | `60`    | Ventana deslizante |
+| `llm.circuit_breaker.open_cooldown_seconds`     | `30`    | Tiempo en `open` antes de `half-open` |
+| `llm.circuit_breaker.half_open_probes`          | `3`     | Requests de prueba en `half-open` |
+| `llm.kms.retry_count`                           | `1`     | Retries ante `kms_unavailable { transient: true }` |
+| `llm.kms.retry_jitter_ms_min`                   | `50`    | Jitter mínimo |
+| `llm.kms.retry_jitter_ms_max`                   | `250`   | Jitter máximo |
+| `llm.dek_cache.ttl_seconds`                     | `300`   | TTL del cache in-process de DEK |
+| `llm.idempotency.ttl_seconds`                   | `600`   | TTL del cache de idempotency en Redis |
+| `llm.abuse.tokens_per_hour_free`                | `10000` | Umbral de detección tokens/hora Free/Creator |
+| `llm.abuse.sustained_hours`                     | `3`     | Horas sostenidas para disparar audit |
+| `llm.abuse.duplicate_prompt_hash_per_day`       | `100`   | Disparador anti-scraping |
 
 ## 17 · Changelog
 
@@ -903,6 +1037,32 @@ it('redacts API keys from log messages', () => {
   de errores, token accounting, providers MVP, observabilidad,
   audit, UserQuota interop, SLOs, testing, fuera de alcance,
   decisiones abiertas. No firmado; pendiente peer review externo.
+- **v0.2** (2026-04-18) — Aplica 6 cambios del primer peer review
+  externo:
+  1. Envelope encryption: KEK **por shard de ~1.000 usuarios**, no
+     por usuario. KMS vendor cerrado = AWS KMS con cálculo de
+     costo explícito (§5.1, §5.2). Blast radius acotado a 1k users
+     por compromise; costo fijo amortizado a $0.010/usuario/mes.
+  2. Fail-closed con retry acotado: 1 retry con jitter 50–250ms
+     ante `kms_unavailable { transient: true }`. Métrica
+     `llm_kms_induced_failures_total` separa fallos KMS de fallos
+     del proveedor LLM (§2 inv. 5, §7.1, §10.2, §13.2).
+  3. Cache in-process permitido: TTL ≤5min, zeroize al eviction,
+     per-worker, con threat model explícito. "Zero caching" de
+     v0.1 era demasiado estricto para la latencia real de KMS
+     (§2 inv. 8, §5.1 flujo de lectura).
+  4. Idempotency semantics corregida: previene side-effects
+     duplicados pero **no garantiza determinismo textual** del
+     output (§4.3).
+  5. Token accounting BYOK: explicita las 3 razones (UI, abuso,
+     analytics) y declara consentimiento informado en Privacy
+     Policy + consent modal (§8 intro nueva).
+  6. Circuit breaker + retry thresholds migran a feature flags
+     GrowthBook (§16). Valores por defecto documentados como
+     tabla; cambios runtime son auditables vía GrowthBook history.
+
+  Pendiente: **segundo peer review con scope solo sobre estos 6
+  cambios** (no el doc completo) antes de promover a v1.0 + firma.
 
 ## 18 · Relación con otros documentos
 
@@ -926,8 +1086,9 @@ it('redacts API keys from log messages', () => {
 
 ---
 
-**Estado**: DRAFT v0.1 — **pendiente de peer review externo + firma
-de Jean**. Next: enviar este documento a AI peer review (patrón
-establecido en `feedback_peer_review_specs.md`), iterar hacia v1.0,
-firmar en frontmatter `status:`, y entonces proceder con
-implementación en `packages/llm-client/`.
+**Estado**: DRAFT v0.2 — **pendiente de segundo peer review
+(scope: diff v0.1→v0.2) + firma de Jean**. Next: enviar los 6
+cambios del changelog v0.2 a una segunda AI de peer review (no el
+doc completo), aplicar ajustes si los hay, promover a v1.0 y
+firmar en frontmatter `status:`. Solo entonces se abre
+`packages/llm-client/` para implementación.
