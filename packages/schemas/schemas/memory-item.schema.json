@@ -1,0 +1,128 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.foco.chisu.io/memory-item.schema.json",
+  "title": "MemoryItem",
+  "description": "A single persisted item in the user's Memoria. One of the 11 approved MVP sources (UX_FROZEN §3.1). Carries mandatory security metadata (INGEST_SECURITY §2, §5) so that every item in the main bucket has been quarantined, MIME-sniffed, AV-scanned, and audited. Contract anchors: UX_FROZEN.md v1.3 §5.2 + INGEST_SECURITY.md v1.0 §2.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "userId",
+    "source",
+    "kind",
+    "title",
+    "summary",
+    "chunks",
+    "mcpExposed",
+    "sensitive",
+    "syncStatus",
+    "sha256",
+    "sizeBytes",
+    "mimeReal",
+    "avVerdict",
+    "avEngine",
+    "sanitized",
+    "quotaBytesCharged",
+    "createdAt",
+    "updatedAt"
+  ],
+  "properties": {
+    "id": { "type": "string", "format": "uuid" },
+    "userId": { "type": "string" },
+    "source": {
+      "type": "string",
+      "enum": [
+        "file",
+        "link",
+        "drive",
+        "github",
+        "mcp",
+        "youtube",
+        "tiktok",
+        "facebook",
+        "linkedin",
+        "instagram",
+        "x"
+      ],
+      "description": "One of the 11 MVP sources from UX_FROZEN §3.1. Anything else is 'Proximamente' and not acceptable."
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "document",
+        "link",
+        "video",
+        "post",
+        "note",
+        "conversation",
+        "learning",
+        "website-section"
+      ]
+    },
+    "title": { "type": "string", "minLength": 1, "maxLength": 500 },
+    "summary": { "type": "string", "maxLength": 10000 },
+    "chunks": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Number of pgvector chunks produced by the chunker/embedder."
+    },
+    "mcpExposed": {
+      "type": "boolean",
+      "description": "Per-item override of §3.2 MCP defaults. If true, this item can be returned to an authorized external agent in the scopes it belongs to."
+    },
+    "sensitive": {
+      "type": "boolean",
+      "description": "User-marked or auto-detected sensitive content. Never exposed via MCP regardless of scope."
+    },
+    "learnedFrom": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "If kind === 'learning', references to the source MemoryItem ids that were synthesized."
+    },
+    "syncStatus": {
+      "type": "string",
+      "enum": ["live", "paused", "error", "manual"]
+    },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "updatedAt": { "type": "string", "format": "date-time" },
+    "lastSyncedAt": {
+      "type": ["string", "null"],
+      "format": "date-time"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "SHA-256 of the original bytes. Used for dedup and maliciousness lookup."
+    },
+    "sizeBytes": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Exact byte size of the stored artifact."
+    },
+    "mimeReal": {
+      "type": "string",
+      "description": "MIME detected by libmagic / file-type at ingest. NEVER the declared Content-Type."
+    },
+    "avVerdict": {
+      "type": "string",
+      "enum": ["clean", "infected", "unknown", "not-applicable"]
+    },
+    "avEngine": {
+      "type": "string",
+      "description": "Canonical AV engine identifier, e.g. 'clamav-1.3.0'."
+    },
+    "avScannedAt": {
+      "type": ["string", "null"],
+      "format": "date-time"
+    },
+    "sanitized": {
+      "type": "boolean",
+      "description": "True if the artifact passed through a sanitizer (SVG→PNG, macros stripped, etc.)."
+    },
+    "quotaBytesCharged": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Bytes billed against the user's plan storage. May differ from sizeBytes after compression/dedup."
+    }
+  }
+}

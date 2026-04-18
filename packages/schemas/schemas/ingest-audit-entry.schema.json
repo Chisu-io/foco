@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.foco.chisu.io/ingest-audit-entry.schema.json",
+  "title": "IngestAuditEntry",
+  "description": "One row in the ingest audit log. Written BEFORE accepting an upload; if the write fails, the upload is rejected (INGEST_SECURITY §2 invariant 10). This is a separate, append-only log; the tamper-evident chain is SystemAuditEntry. Contract anchors: UX_FROZEN.md v1.3 §5.4 + INGEST_SECURITY.md v1.0 §2.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "userId",
+    "source",
+    "verdict",
+    "timestamp"
+  ],
+  "properties": {
+    "id": { "type": "string", "format": "uuid" },
+    "userId": { "type": "string" },
+    "source": {
+      "type": "string",
+      "enum": [
+        "file",
+        "link",
+        "drive",
+        "github",
+        "mcp",
+        "youtube",
+        "tiktok",
+        "facebook",
+        "linkedin",
+        "instagram",
+        "x"
+      ]
+    },
+    "filename": {
+      "type": ["string", "null"],
+      "description": "Original filename as provided by the client, truncated to 255 chars. null for streamed / URL sources."
+    },
+    "sizeBytes": { "type": ["integer", "null"], "minimum": 0 },
+    "mimeDeclared": {
+      "type": ["string", "null"],
+      "description": "Content-Type sent by the client. NEVER trusted; used only for audit comparison."
+    },
+    "mimeReal": {
+      "type": ["string", "null"],
+      "description": "libmagic / file-type verdict. The one that decided whitelist passage."
+    },
+    "sha256": {
+      "type": ["string", "null"],
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "avVerdict": {
+      "type": "string",
+      "enum": ["clean", "infected", "unknown", "skipped-not-applicable", "error"]
+    },
+    "avEngine": {
+      "type": ["string", "null"],
+      "description": "Engine id + version, e.g. 'clamav-1.3.0-2026-04-17'."
+    },
+    "avEngineVersion": { "type": ["string", "null"] },
+    "scanDurationMs": { "type": ["integer", "null"], "minimum": 0 },
+    "verdict": {
+      "type": "string",
+      "enum": ["accepted", "rejected", "quarantined", "error"],
+      "description": "Final disposition. 'quarantined' means the artifact is held pending async re-scan; 'rejected' + AV-positive = immediate deletion from quarantine bucket."
+    },
+    "reason": {
+      "type": ["string", "null"],
+      "description": "Machine-readable reason code. Examples: 'mime-not-whitelisted', 'av-positive', 'quota-storage-exceeded', 'quota-daily-exceeded', 'file-too-large', 'ssrf-private-ip', 'escalation-step-active'."
+    },
+    "quarantineUri": {
+      "type": ["string", "null"],
+      "format": "uri",
+      "description": "R2 URI in foco-quarantine bucket while scanning. Cleared after final disposition."
+    },
+    "timestamp": { "type": "string", "format": "date-time" }
+  }
+}

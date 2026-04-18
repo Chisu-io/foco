@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.foco.chisu.io/system-audit-entry.schema.json",
+  "title": "SystemAuditEntry",
+  "description": "One row in the tamper-evident system audit log. Each entry carries the SHA-256 of the previous row; a monthly dump is cosign-signed to R2 Object Lock with 7-year retention. Contract anchor: PRODUCTION_READINESS.md v1.0 §3.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "sequence",
+    "occurredAt",
+    "actor",
+    "action",
+    "prevHash",
+    "rowHash"
+  ],
+  "properties": {
+    "id": { "type": "string", "format": "uuid" },
+    "sequence": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Monotonically increasing serial. Gaps are a red flag."
+    },
+    "occurredAt": { "type": "string", "format": "date-time" },
+    "actor": { "$ref": "#/$defs/actor" },
+    "action": {
+      "type": "string",
+      "description": "Dotted, namespaced action code. Examples: 'ingest.accepted', 'ingest.rejected.av-positive', 'render.queued', 'mcp.auth.created', 'mcp.auth.revoked', 'llm.key.rotated', 'plan.upgraded', 'dsr.export.requested', 'dsr.delete.executed', 'moderation.csam-positive'."
+    },
+    "resource": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "description": "Resource kind: 'memory-item', 'render-job', 'mcp-authorization', 'user', 'plan', etc."
+        },
+        "id": { "type": "string" }
+      },
+      "required": ["type", "id"]
+    },
+    "details": {
+      "type": ["object", "null"],
+      "description": "Free-form JSON for action-specific context. Must NEVER contain secrets, raw LLM keys, or PII beyond what's needed to interpret the event.",
+      "additionalProperties": true
+    },
+    "requestId": {
+      "type": ["string", "null"],
+      "description": "W3C traceparent request id to correlate with Grafana Tempo spans."
+    },
+    "ip": {
+      "type": ["string", "null"],
+      "description": "Originating IP. Truncated to /24 (IPv4) or /64 (IPv6) for EU residents unless retention exception applies."
+    },
+    "userAgent": { "type": ["string", "null"] },
+    "prevHash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "SHA-256 of the previous row's canonical JSON. The first row uses '0000...0000' (64 zeros)."
+    },
+    "rowHash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "SHA-256 of this row's canonical JSON excluding rowHash itself. Verification job recomputes and alerts on mismatch."
+    }
+  },
+  "$defs": {
+    "actor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["user", "service", "system", "mcp-agent", "admin"]
+        },
+        "id": {
+          "type": ["string", "null"],
+          "description": "Stable identifier for the actor. null for 'system' entries (e.g. scheduled jobs)."
+        },
+        "displayName": { "type": ["string", "null"] }
+      }
+    }
+  }
+}

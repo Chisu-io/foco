@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.foco.chisu.io/user-quota.schema.json",
+  "title": "UserQuota",
+  "description": "Runtime view of a user's plan consumption. Plan tiers and limits are signed in INGEST_SECURITY.md v1.0 §4. BYOK fields reflect the signed BYOK model for Free and Creator (project_foco_byok_model.md). Contract anchors: UX_FROZEN.md v1.3 §5.4 + INGEST_SECURITY.md v1.0 §4-§4.3.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "userId",
+    "plan",
+    "storageUsedBytes",
+    "storageLimitBytes",
+    "uploadsToday",
+    "uploadsDailyLimit",
+    "bytesToday",
+    "bytesDailyLimit",
+    "videosThisCycle",
+    "videosCycleLimit",
+    "seatsUsed",
+    "seatsLimit",
+    "maxUploadFileBytes",
+    "resetsAt",
+    "cycleResetsAt",
+    "llmKeyProvider",
+    "llmKeyStatus",
+    "infectionEscalationStep"
+  ],
+  "properties": {
+    "userId": { "type": "string" },
+    "plan": {
+      "type": "string",
+      "enum": ["free", "creator", "influencer", "celebrity", "studio"],
+      "description": "Signed plan set. 2026-04-17: Free $0 BYOK / Creator $39 BYOK / Influencer $99 managed / Celebrity $199 managed / Studio custom."
+    },
+    "storageUsedBytes": { "type": "integer", "minimum": 0 },
+    "storageLimitBytes": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Hard cap. Free 500 MB, Creator 10 GB, Influencer 50 GB, Celebrity 200 GB, Studio custom."
+    },
+    "uploadsToday": { "type": "integer", "minimum": 0 },
+    "uploadsDailyLimit": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Soft daily ceiling. Warn at 80%, block at 100%, reset 00:00 UTC."
+    },
+    "bytesToday": { "type": "integer", "minimum": 0 },
+    "bytesDailyLimit": { "type": "integer", "minimum": 0 },
+    "videosThisCycle": { "type": "integer", "minimum": 0 },
+    "videosCycleLimit": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Hard cap within the billing cycle. Free 5, Creator 60, Influencer 300, Celebrity 1000, Studio custom."
+    },
+    "seatsUsed": { "type": "integer", "minimum": 0 },
+    "seatsLimit": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "1 for Free/Creator/Influencer, up to 3 for Celebrity, custom for Studio."
+    },
+    "maxUploadFileBytes": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Per-file ceiling. Free 100 MB, Creator 500 MB, Influencer 500 MB, Celebrity 2 GB, Studio custom."
+    },
+    "resetsAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Next daily-counter reset (00:00 UTC)."
+    },
+    "cycleResetsAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Next billing-cycle reset (usually the plan anniversary)."
+    },
+    "llmKeyProvider": {
+      "type": ["string", "null"],
+      "enum": ["anthropic", "openai", null],
+      "description": "Set when the user has registered a BYOK key. null = not set (blocking for Free/Creator; fallback-optional for Influencer+)."
+    },
+    "llmKeyStatus": {
+      "type": "string",
+      "enum": ["active", "invalid", "quota_exhausted", "not_set"],
+      "description": "Cached status of the BYOK key. Updated after each LLM call or on user edit. UI reads this to show correct state without touching the key."
+    },
+    "infectionEscalationStep": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 5,
+      "description": "INGEST_SECURITY §4.3 rolling 30d counter. 0 = clean, 1 = 30min ban, 2 = 12h, 3 = 24h, 4 = 72h, 5 = indefinite pending human review."
+    },
+    "infectionsLast30d": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Count of confirmed infections in the rolling 30d window. Drives escalation-step increments."
+    }
+  }
+}

@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.foco.chisu.io/mcp-authorization.schema.json",
+  "title": "McpAuthorization",
+  "description": "A per-agent authorization that allows an external AI (Claude Desktop, Cursor, ChatGPT with connectors, Gemini) to call Foco as an MCP server with a limited scope set. Defaults are conservative (§3.2 of UX_FROZEN). AI conversations inside Foco's own assistant are NEVER re-exposed via MCP (project_foco_mcp_bidireccional.md). Contract anchor: UX_FROZEN.md v1.3 §5.3 + §3.2.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "userId",
+    "agentId",
+    "displayName",
+    "apiKeyHash",
+    "scopes",
+    "createdAt"
+  ],
+  "properties": {
+    "id": { "type": "string", "format": "uuid" },
+    "userId": { "type": "string" },
+    "agentId": {
+      "type": "string",
+      "description": "Stable client identifier supplied by the agent, e.g. 'claude-desktop-local-8f3a'."
+    },
+    "displayName": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120,
+      "description": "Human-friendly label shown in Settings → MCP (SCREEN 14). User can rename."
+    },
+    "apiKeyHash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "SHA-256 of the API key at rest. Plaintext is shown ONCE at creation and never stored."
+    },
+    "apiKeyPreview": {
+      "type": ["string", "null"],
+      "description": "Last 4 chars, e.g. 'xY7q', for UI display. Never the full key."
+    },
+    "scopes": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "enum": ["learnings", "brand", "documents", "github", "socials"]
+      },
+      "description": "Granular scopes per UX_FROZEN §3.2. 'learnings' is conservative default; 'socials' and 'github' require explicit opt-in."
+    },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "lastUsedAt": {
+      "type": ["string", "null"],
+      "format": "date-time"
+    },
+    "revokedAt": {
+      "type": ["string", "null"],
+      "format": "date-time",
+      "description": "If set, the authorization is revoked and future calls with this key fail-closed. Past audit entries remain immutable."
+    },
+    "rateLimit": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "callsPerMinute": { "type": "integer", "minimum": 1, "default": 60 },
+        "callsPerDay": { "type": "integer", "minimum": 1, "default": 5000 }
+      }
+    }
+  }
+}

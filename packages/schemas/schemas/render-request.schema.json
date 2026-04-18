@@ -1,0 +1,308 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.foco.chisu.io/render-request.schema.json",
+  "title": "RenderRequest",
+  "description": "Input to the Foco render-worker. Describes a vertical (or square / landscape) short video as a timeline of scenes, each with ordered layers. Contract anchor: UX_FROZEN.md v1.3 §5.1.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "userId",
+    "aspectRatio",
+    "durationSec",
+    "fps",
+    "scenes",
+    "output",
+    "createdAt"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Render job UUID. Unique across the system."
+    },
+    "userId": {
+      "type": "string",
+      "description": "Owner of the render. Used for quota accounting and storage prefix."
+    },
+    "aspectRatio": {
+      "type": "string",
+      "enum": ["9:16", "1:1", "16:9"],
+      "description": "UX_FROZEN §3.4: the three target aspect ratios for MVP."
+    },
+    "durationSec": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "maximum": 600,
+      "description": "Total video duration. Hard cap 600s = 10 min for MVP."
+    },
+    "fps": {
+      "type": "integer",
+      "enum": [24, 30, 60],
+      "description": "Output frame rate. 30 is the default target for social platforms."
+    },
+    "scenes": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/scene" },
+      "description": "Ordered list of scenes. A scene boundary is a render-cache boundary."
+    },
+    "output": { "$ref": "#/$defs/outputSpec" },
+    "brand": {
+      "$ref": "#/$defs/brandTokens",
+      "description": "Optional brand tokens to apply across the render. Overrides any per-layer defaults."
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO-8601 UTC timestamp at which the render was queued."
+    }
+  },
+  "$defs": {
+    "scene": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "startSec", "endSec", "layers"],
+      "properties": {
+        "id": { "type": "string" },
+        "startSec": { "type": "number", "minimum": 0 },
+        "endSec": { "type": "number", "exclusiveMinimum": 0 },
+        "cacheKey": {
+          "type": "string",
+          "description": "SHA-256 of the canonical scene fingerprint. Workers use it to short-circuit renders."
+        },
+        "layers": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/layer" }
+        }
+      }
+    },
+    "layer": {
+      "oneOf": [
+        { "$ref": "#/$defs/faceCamLayer" },
+        { "$ref": "#/$defs/avatarLayer" },
+        { "$ref": "#/$defs/captionLayer" },
+        { "$ref": "#/$defs/overlayLayer" },
+        { "$ref": "#/$defs/bgMusicLayer" }
+      ]
+    },
+    "faceCamLayer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "id", "sourceUri"],
+      "properties": {
+        "kind": { "const": "faceCam" },
+        "id": { "type": "string" },
+        "sourceUri": {
+          "type": "string",
+          "format": "uri",
+          "description": "R2 URI to the face-cam clip. Must live in the foco-memory bucket."
+        },
+        "trim": { "$ref": "#/$defs/trim" },
+        "transform": { "$ref": "#/$defs/transform" }
+      }
+    },
+    "avatarLayer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "id", "avatarId", "script"],
+      "properties": {
+        "kind": { "const": "avatar" },
+        "id": { "type": "string" },
+        "avatarId": {
+          "type": "string",
+          "description": "Reference to a registered avatar (built from user photos + voice, per UX_FROZEN §3.3)."
+        },
+        "script": {
+          "type": "string",
+          "description": "TTS script. XTTS v2 (voice cloned) or Kokoro-82M (base)."
+        },
+        "emotion": {
+          "type": "string",
+          "enum": ["neutral", "enthusiastic", "calm", "serious"],
+          "default": "neutral"
+        },
+        "transform": { "$ref": "#/$defs/transform" }
+      }
+    },
+    "captionLayer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "id", "words"],
+      "properties": {
+        "kind": { "const": "caption" },
+        "id": { "type": "string" },
+        "words": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/captionWord" }
+        },
+        "style": { "$ref": "#/$defs/captionStyle" }
+      }
+    },
+    "captionWord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["word", "tStartSec", "tEndSec"],
+      "properties": {
+        "word": { "type": "string", "minLength": 1 },
+        "tStartSec": { "type": "number", "minimum": 0 },
+        "tEndSec": { "type": "number", "exclusiveMinimum": 0 }
+      }
+    },
+    "captionStyle": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "fontFamily": { "type": "string", "default": "Inter" },
+        "fontSizePct": {
+          "type": "number",
+          "minimum": 2,
+          "maximum": 20,
+          "default": 6,
+          "description": "Font size as a percentage of frame height. WCAG AAA compliance inherited from UX_FROZEN §1."
+        },
+        "color": {
+          "type": "string",
+          "pattern": "^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$",
+          "default": "#FFFFFF"
+        },
+        "outlineColor": {
+          "type": "string",
+          "pattern": "^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$",
+          "default": "#000000"
+        },
+        "highlightColor": {
+          "type": "string",
+          "pattern": "^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$",
+          "description": "Optional per-word highlight color (karaoke-style)."
+        },
+        "position": {
+          "type": "string",
+          "enum": ["top", "center", "bottom"],
+          "default": "bottom"
+        }
+      }
+    },
+    "overlayLayer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "id", "content"],
+      "properties": {
+        "kind": { "const": "overlay" },
+        "id": { "type": "string" },
+        "content": {
+          "oneOf": [
+            { "$ref": "#/$defs/textOverlay" },
+            { "$ref": "#/$defs/imageOverlay" },
+            { "$ref": "#/$defs/shapeOverlay" }
+          ]
+        },
+        "startSec": { "type": "number", "minimum": 0 },
+        "endSec": { "type": "number", "exclusiveMinimum": 0 },
+        "transform": { "$ref": "#/$defs/transform" }
+      }
+    },
+    "textOverlay": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "text"],
+      "properties": {
+        "type": { "const": "text" },
+        "text": { "type": "string" },
+        "style": { "$ref": "#/$defs/captionStyle" }
+      }
+    },
+    "imageOverlay": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "sourceUri"],
+      "properties": {
+        "type": { "const": "image" },
+        "sourceUri": { "type": "string", "format": "uri" },
+        "opacity": { "type": "number", "minimum": 0, "maximum": 1, "default": 1 }
+      }
+    },
+    "shapeOverlay": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "shape"],
+      "properties": {
+        "type": { "const": "shape" },
+        "shape": { "type": "string", "enum": ["rect", "circle", "rounded-rect"] },
+        "fill": {
+          "type": "string",
+          "pattern": "^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$"
+        }
+      }
+    },
+    "bgMusicLayer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "id", "sourceUri"],
+      "properties": {
+        "kind": { "const": "bgMusic" },
+        "id": { "type": "string" },
+        "sourceUri": { "type": "string", "format": "uri" },
+        "volumeDb": {
+          "type": "number",
+          "minimum": -60,
+          "maximum": 0,
+          "default": -18,
+          "description": "Broadcast-style default of -18 dBFS to leave room for VO."
+        },
+        "fadeInSec": { "type": "number", "minimum": 0, "default": 0 },
+        "fadeOutSec": { "type": "number", "minimum": 0, "default": 0 }
+      }
+    },
+    "trim": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "inSec": { "type": "number", "minimum": 0 },
+        "outSec": { "type": "number", "exclusiveMinimum": 0 }
+      }
+    },
+    "transform": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "xPct": { "type": "number", "minimum": -100, "maximum": 200, "default": 50 },
+        "yPct": { "type": "number", "minimum": -100, "maximum": 200, "default": 50 },
+        "widthPct": { "type": "number", "exclusiveMinimum": 0, "maximum": 200, "default": 100 },
+        "heightPct": { "type": "number", "exclusiveMinimum": 0, "maximum": 200, "default": 100 },
+        "rotationDeg": { "type": "number", "minimum": -360, "maximum": 360, "default": 0 },
+        "zIndex": { "type": "integer", "default": 0 }
+      }
+    },
+    "outputSpec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["container", "videoCodec"],
+      "properties": {
+        "container": { "type": "string", "enum": ["mp4", "mov", "webm"], "default": "mp4" },
+        "videoCodec": { "type": "string", "enum": ["h264", "h265", "av1", "vp9"], "default": "h264" },
+        "audioCodec": { "type": "string", "enum": ["aac", "opus"], "default": "aac" },
+        "videoBitrateKbps": { "type": "integer", "minimum": 500, "maximum": 20000, "default": 6000 },
+        "audioBitrateKbps": { "type": "integer", "minimum": 64, "maximum": 320, "default": 192 }
+      }
+    },
+    "brandTokens": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "primaryColor": {
+          "type": "string",
+          "pattern": "^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$"
+        },
+        "accentColor": {
+          "type": "string",
+          "pattern": "^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$"
+        },
+        "fontFamily": { "type": "string" },
+        "logoUri": { "type": "string", "format": "uri" }
+      }
+    }
+  }
+}
