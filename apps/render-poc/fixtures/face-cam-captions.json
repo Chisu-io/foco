@@ -1,0 +1,60 @@
+{
+  "id": "00000000-0000-4000-8000-000000000001",
+  "userId": "user_poc_jean",
+  "aspectRatio": "9:16",
+  "durationSec": 3,
+  "fps": 30,
+  "scenes": [
+    {
+      "id": "scene-0",
+      "startSec": 0,
+      "endSec": 3,
+      "layers": [
+        {
+          "kind": "faceCam",
+          "id": "face-0",
+          "sourceUri": "https://cdn.foco.chisu.io/poc/face-cam-sample.mp4",
+          "transform": {
+            "xPct": 50,
+            "yPct": 50,
+            "widthPct": 100,
+            "heightPct": 100,
+            "rotationDeg": 0,
+            "zIndex": 0
+          }
+        },
+        {
+          "kind": "caption",
+          "id": "cap-0",
+          "words": [
+            { "word": "Foco", "tStartSec": 0.0, "tEndSec": 0.4 },
+            { "word": "te", "tStartSec": 0.4, "tEndSec": 0.55 },
+            { "word": "convierte", "tStartSec": 0.55, "tEndSec": 1.05 },
+            { "word": "en", "tStartSec": 1.05, "tEndSec": 1.2 },
+            { "word": "creador", "tStartSec": 1.2, "tEndSec": 1.75 },
+            { "word": "viral", "tStartSec": 1.75, "tEndSec": 2.15 },
+            { "word": "sin", "tStartSec": 2.15, "tEndSec": 2.4 },
+            { "word": "editar", "tStartSec": 2.4, "tEndSec": 2.8 },
+            { "word": "nada", "tStartSec": 2.8, "tEndSec": 3.0 }
+          ],
+          "style": {
+            "fontFamily": "Inter",
+            "fontSizePct": 6,
+            "color": "#FFFFFF",
+            "outlineColor": "#000000",
+            "highlightColor": "#FFD60A",
+            "position": "bottom"
+          }
+        }
+      ]
+    }
+  ],
+  "output": {
+    "container": "mp4",
+    "videoCodec": "h264",
+    "audioCodec": "aac",
+    "videoBitrateKbps": 6000,
+    "audioBitrateKbps": 192
+  },
+  "createdAt": "2026-04-18T00:00:00Z"
+}
