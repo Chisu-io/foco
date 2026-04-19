@@ -1,0 +1,88 @@
+{
+  "name": "@chisu/llm-client",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Plan-aware LLM client for Foco. Routes BYOK (Free/Creator) vs Managed (Influencer+) with envelope encryption (AWS KMS KEK-per-shard), circuit breakers, token accounting and fail-closed semantics. Implements LLM_CLIENT.md v1.1.",
+  "keywords": [
+    "llm",
+    "byok",
+    "envelope-encryption",
+    "kms",
+    "foco",
+    "chisu",
+    "anthropic",
+    "openai",
+    "gemini"
+  ],
+  "homepage": "https://github.com/Chisu-io/foco/tree/main/packages/llm-client",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Chisu-io/foco.git",
+    "directory": "packages/llm-client"
+  },
+  "bugs": {
+    "url": "https://github.com/Chisu-io/foco/issues"
+  },
+  "license": "SEE LICENSE IN ../../LICENSE-PROPRIETARY",
+  "author": "Chisu <hello@chisu.io>",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts"
+    },
+    "./errors": {
+      "types": "./src/errors/index.ts",
+      "import": "./src/errors/index.ts"
+    },
+    "./config": {
+      "types": "./src/config/index.ts",
+      "import": "./src/config/index.ts"
+    }
+  },
+  "publishConfig": {
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "import": "./dist/index.js"
+      },
+      "./errors": {
+        "types": "./dist/errors/index.d.ts",
+        "import": "./dist/errors/index.js"
+      },
+      "./config": {
+        "types": "./dist/config/index.d.ts",
+        "import": "./dist/config/index.js"
+      }
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "dev": "tsc -p tsconfig.build.json --watch",
+    "test": "vitest run --coverage --passWithNoTests",
+    "test:watch": "vitest --passWithNoTests",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist .turbo coverage"
+  },
+  "dependencies": {
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@vitest/coverage-v8": "^3.0.0",
+    "vitest": "^3.0.0"
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  }
+}

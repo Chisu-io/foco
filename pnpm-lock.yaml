@@ -94,6 +94,22 @@ importers:
 
   packages/captions: {}
 
+  packages/llm-client:
+    dependencies:
+      zod:
+        specifier: ^3.25.0
+        version: 3.25.76
+    devDependencies:
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.12.2
+      '@vitest/coverage-v8':
+        specifier: ^3.0.0
+        version: 3.2.4(vitest@3.2.4(@types/node@24.12.2)(tsx@4.21.0)(yaml@2.8.3))
+      vitest:
+        specifier: ^3.0.0
+        version: 3.2.4(@types/node@24.12.2)(tsx@4.21.0)(yaml@2.8.3)
+
   packages/media-primitives: {}
 
   packages/publisher: {}
