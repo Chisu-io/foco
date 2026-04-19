@@ -1,9 +1,9 @@
 ---
-title: Foco · LLM_CLIENT v1.0
-status: SIGNED v1.0 (2026-04-18)
+title: Foco · LLM_CLIENT v1.1
+status: SIGNED v1.1 (2026-04-18)
 date: 2026-04-18
 owner: Jean Pierre Rojas
-signed_by: Jean Pierre Rojas — 2026-04-18
+signed_by: Jean Pierre Rojas — 2026-04-18 (v1.1)
 reviewers:
   - Jean Pierre Rojas (owner)
   - AI peer review externo, pasada 1 (aplicada en v0.2)
@@ -45,9 +45,19 @@ changelog:
     los 8 invariantes de §2 requiere nueva ronda de peer review
     + re-firma. `packages/llm-client/` habilitado para
     implementación.
+  - v1.1 (2026-04-18): agrega **Google Gemini** como tercer
+    proveedor MVP vía **Gemini API directa (AI Studio)**.
+    Modelos: `gemini-2.5-pro`, `gemini-2.5-flash`. Cambios
+    aditivos en §1.1, §3.1, §3.3, §3.4, §4.2, §9 (nueva §9.3
+    Gemini + interface `Provider` renumerada a §9.4) y §15. **No
+    toca los 8 invariantes de §2 ni §5 (crypto) ni §8 (accounting)**
+    — por eso no requiere nueva ronda de peer review externo, solo
+    firma de Jean en este changelog. El path Vertex AI (GCP
+    service accounts) explícitamente **sigue fuera del MVP**
+    (complejidad operacional innecesaria para BYOK).
 ---
 
-# Foco · LLM_CLIENT v1.0
+# Foco · LLM_CLIENT v1.1
 
 > **Principio rector.** Foco trata a cada llamada a un LLM como un
 > **evento facturable con superficie de ataque**. Nunca hay plaintext
@@ -65,8 +75,9 @@ changelog:
 Define el contrato técnico del paquete `@chisu/llm-client` y su
 componente runtime `LLMClient`, que es el **único** punto de entrada
 de Foco a APIs generativas de LLM (Anthropic Messages, OpenAI Chat
-Completions). Todo worker, edge function, MCP handler o asistente
-conversacional que necesite completions pasa por `LLMClient`.
+Completions, Google Gemini API). Todo worker, edge function, MCP
+handler o asistente conversacional que necesite completions pasa por
+`LLMClient`.
 
 ### 1.2 Qué NO cubre (fuera de alcance del cliente generativo)
 
@@ -136,7 +147,8 @@ con invariantes de seguridad que nunca deben depender del plan.
    de fallos del proveedor LLM.
    **Crítico — NO existe circuit breaker sobre KMS**: el circuit
    breaker (§4.2) aplica exclusivamente a proveedores LLM
-   (Anthropic, OpenAI). Sobre KMS el manejo es fail-closed directo
+   (Anthropic, OpenAI, Gemini — y cualquier proveedor añadido en el
+   futuro vía §9.4). Sobre KMS el manejo es fail-closed directo
    con retry budget **fijo = 1** (no configurable a >1 vía flag,
    para evitar amplificación de carga sobre una región degradada;
    ver §4.3 y §13.2). La razón: un "CB abierto sobre KMS" no
@@ -145,10 +157,12 @@ con invariantes de seguridad que nunca deben depender del plan.
 6. **Token accounting para todos**, no sólo Managed. En BYOK
    contamos tokens para UI de uso en `settings-integraciones`,
    detección de abuso, y analytics — no para billing.
-7. **Circuit breaker por proveedor**. Si Anthropic o OpenAI tienen
-   tasa de error >X% en ventana Y, Foco abre el circuito y usa
-   fallback (otro proveedor o error estructurado). Ningún caller
-   bloquea indefinidamente.
+7. **Circuit breaker por proveedor**. Si Anthropic, OpenAI o Gemini
+   tienen tasa de error >X% en ventana Y, Foco abre el circuito y
+   usa fallback (otro proveedor o error estructurado). Ningún
+   caller bloquea indefinidamente. El invariante es "CB por
+   proveedor LLM" — la lista de proveedores concretos vive en §9 y
+   crece aditivamente sin tocar este invariante.
 8. **Scope mínimo en las keys de usuario**. La key BYOK solo se
    descifra dentro del proceso worker que hace la llamada. Zero IPC
    con otros workers con ella en claro. **Se permite caching
@@ -190,6 +204,7 @@ foco/packages/llm-client/
     providers/
       anthropic.ts    # Provider para Claude Messages API
       openai.ts       # Provider para OpenAI Chat Completions
+      gemini.ts       # Provider para Google Gemini API (AI Studio)
       provider.ts     # interface Provider
     crypto/
       envelope.ts     # envelope encryption (DEK + KEK)
@@ -275,7 +290,7 @@ export interface LLMCallInput {
   request: NormalizedLLMRequest;
 
   /** Hint de proveedor preferido; el router puede ignorarlo. */
-  providerHint?: 'anthropic' | 'openai';
+  providerHint?: 'anthropic' | 'openai' | 'gemini';
 
   /** W3C traceparent del span padre. Obligatorio en producción. */
   traceparent: string;
@@ -290,7 +305,9 @@ export interface NormalizedLLMRequest {
     | 'claude-sonnet-4-6'
     | 'claude-haiku-4-5'
     | 'gpt-5'                      // placeholder — confirmar al lanzar
-    | 'gpt-5-mini';
+    | 'gpt-5-mini'
+    | 'gemini-2.5-pro'
+    | 'gemini-2.5-flash';
   messages: NormalizedMessage[];
   systemPrompt?: string;
   maxTokens: number;               // obligatorio, no default
@@ -315,7 +332,7 @@ export interface LLMCallOutput {
   modelUsed: string;
 
   /** Proveedor que atendió la llamada. */
-  providerUsed: 'anthropic' | 'openai';
+  providerUsed: 'anthropic' | 'openai' | 'gemini';
 
   /** Modo de financiación resuelto — para analytics, nunca UI. */
   fundingMode: 'byok' | 'managed';
@@ -402,7 +419,7 @@ de esa decisión es del usuario, no del sistema.
 Abre cuando error rate >30% y volumen >20 requests. Estado
 `open` por 30s, luego `half-open` permite 3 probes; si fallan,
 re-abre. Implementado en `routing/fallback.ts`, observable vía
-métrica `llm_circuit_state{provider="anthropic"|"openai"}`.
+métrica `llm_circuit_state{provider="anthropic"|"openai"|"gemini"}`.
 
 ### 4.3 Idempotency y retries
 
@@ -802,7 +819,7 @@ CREATE TABLE llm_token_usage (
   id              UUID PRIMARY KEY,
   user_id         UUID NOT NULL REFERENCES auth.users(id),
   occurred_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
-  provider        TEXT NOT NULL,           -- 'anthropic'|'openai'
+  provider        TEXT NOT NULL,           -- 'anthropic'|'openai'|'gemini'
   model           TEXT NOT NULL,
   funding_mode    TEXT NOT NULL,           -- 'byok'|'managed'
   origin          TEXT NOT NULL,           -- enum de LLMCallInput.origin
@@ -878,11 +895,59 @@ incident.io.
 - Peculiaridades: `usage.prompt_tokens` + `usage.completion_tokens`
   (nombres distintos a Anthropic — traducción interna).
 
-### 9.3 Interface `Provider`
+### 9.3 Google Gemini (AI Studio / Gemini API directa)
+
+- Endpoint base:
+  `https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent`
+- Auth: API key vía query param `?key=<userKey>` **o** header
+  `x-goog-api-key: <userKey>` (Foco usa el header para que la key
+  **no aparezca en el access log**; query params quedarían
+  logueados por default en balancers y CDNs — invariante §2 #1).
+- Modelos MVP: `gemini-2.5-pro`, `gemini-2.5-flash`.
+- **Path deliberadamente elegido**: Gemini API directa (AI Studio),
+  **no** Vertex AI. Rationale: el usuario BYOK consigue su key en
+  aistudio.google.com en <1 min; Vertex requeriría proyecto GCP +
+  service account JSON — hostil para Free/Creator. Vertex AI sigue
+  fuera del MVP (§15).
+- Feature support: tool use ✓ (nombre `functionDeclarations`),
+  `response_mime_type: 'application/json'` como equivalente a
+  `json_object` ✓, stop sequences ✓ (campo `stopSequences` en
+  `generationConfig`), streaming ✗ (fuera de MVP como Anthropic/
+  OpenAI).
+- Peculiaridades del wire format:
+  - **Mensajes**: `contents: [{ role: 'user'|'model', parts: [...] }]`
+    — nota `'model'` en vez de `'assistant'`. Traducción interna
+    del `NormalizedMessage`.
+  - **System prompt**: campo separado `systemInstruction`, no va
+    dentro de `contents`.
+  - **`generationConfig`**: agrupa `maxOutputTokens` (no
+    `max_tokens`), `temperature`, `stopSequences`, `topP`, `topK`.
+  - **Usage**: `usageMetadata: { promptTokenCount,
+    candidatesTokenCount, totalTokenCount }` — mapeo a
+    `LLMCallOutput.usage` como `inputTokens=promptTokenCount`,
+    `outputTokens=candidatesTokenCount`,
+    `totalTokens=totalTokenCount`.
+  - **Stop reason**: `candidates[0].finishReason` ∈ `{'STOP',
+    'MAX_TOKENS', 'SAFETY', 'RECITATION', 'OTHER'}` — mapeo a
+    `stopReason`: `STOP`→`end_turn`, `MAX_TOKENS`→`max_tokens`,
+    `SAFETY`/`RECITATION`→devolver `LLMCallError.content_blocked`
+    (no normalizar como output exitoso).
+  - **Errores**: HTTP 400 con `error.status='INVALID_ARGUMENT'` y
+    `error.message` conteniendo "API key not valid" →
+    `invalid_key`; `RESOURCE_EXHAUSTED` → `rate_limit` o
+    `quota_exhausted` según cuerpo; `PERMISSION_DENIED` sin billing
+    habilitado → `quota_exhausted`.
+- **Circuit breaker**: misma ventana y umbrales que Anthropic/
+  OpenAI (flags compartidos — ver §16). Estado observable en
+  `llm_circuit_state{provider="gemini"}`.
+- **Pool Managed**: key en Doppler path
+  `foco/prod/llm/gemini/pool/primary`.
+
+### 9.4 Interface `Provider`
 
 ```ts
 export interface Provider {
-  readonly name: 'anthropic' | 'openai';
+  readonly name: 'anthropic' | 'openai' | 'gemini';
 
   /**
    * Mapea un `NormalizedLLMRequest` al wire format del proveedor,
@@ -901,9 +966,11 @@ export interface Provider {
 ```
 
 Agregar un proveedor nuevo requiere implementar esta interface +
-añadir el enum correspondiente en `LLMCallOutput.providerUsed`.
-MVP no incluye Azure OpenAI, Google Vertex, Mistral, AWS Bedrock;
-están contemplados post-MVP (ver §15).
+añadir el enum correspondiente en `LLMCallOutput.providerUsed`,
+`LLMCallInput.providerHint` y `Provider.name`. MVP v1.1 incluye
+Anthropic + OpenAI + Gemini (vía AI Studio). Post-MVP contemplados:
+Azure OpenAI, Google **Vertex AI** (path alternativo a Gemini con
+service account GCP), Mistral, AWS Bedrock. Ver §15.
 
 ## 10 · Observability
 
@@ -912,7 +979,7 @@ están contemplados post-MVP (ver §15).
 Cada `.call()` crea un span `llm.client.call` con atributos:
 
 ```
-llm.provider               = "anthropic" | "openai"
+llm.provider               = "anthropic" | "openai" | "gemini"
 llm.model                  = <model usado>
 llm.funding_mode           = "byok" | "managed"
 llm.origin                 = <origin enum>
@@ -1014,7 +1081,7 @@ con los campos declarados en `project_foco_byok_model.md`:
 ```ts
 export interface UserQuota {
   // ... campos existentes de UX_FROZEN §3.6 ...
-  llmKeyProvider: 'anthropic' | 'openai' | null;
+  llmKeyProvider: 'anthropic' | 'openai' | 'gemini' | null;
   llmKeyStatus:
     | 'active'
     | 'invalid'
@@ -1051,7 +1118,8 @@ lo computa en lectura.
 
 **Importante — scope del circuit breaker**. El circuit breaker
 descrito en §4.2 aplica **exclusivamente a proveedores LLM**
-(Anthropic, OpenAI). NO existe circuit breaker sobre KMS. Frases
+(Anthropic, OpenAI, Gemini — y cualquier proveedor futuro añadido
+vía §9.4). NO existe circuit breaker sobre KMS. Frases
 como "circuit KMS abre" que pudieran aparecer en versiones
 anteriores son lenguaje figurativo para describir el estado
 "retries agotados + entradas en cache in-process expirando →
@@ -1090,9 +1158,10 @@ budget KMS fijo").
 ### 14.2 Contract tests (sandbox keys)
 
 Un workflow CI separado `llm-contract-tests.yml` corre **semanal**
-con keys sandbox de Anthropic y OpenAI (no las de pool) contra
-modelos mini (`haiku`, `gpt-5-mini`) para detectar breaking changes
-de proveedor antes de que afecten producción. Tests:
+con keys sandbox de Anthropic, OpenAI y Gemini (no las de pool)
+contra modelos mini (`haiku`, `gpt-5-mini`, `gemini-2.5-flash`)
+para detectar breaking changes de proveedor antes de que afecten
+producción. Tests:
 
 - Ping básico → 200 OK, formato de response esperado.
 - Completion corta con tool use → response mapeable.
@@ -1139,8 +1208,10 @@ it('redacts API keys from log messages', () => {
   token-a-token; para la UI conversational sería ideal. Post-MVP
   v0.2 porque añade complejidad de SSE + cancel semantics +
   accounting parcial.
-- **Proveedores adicionales**: Azure OpenAI, Google Vertex,
-  Mistral, Bedrock. Contemplados pero fuera MVP.
+- **Proveedores adicionales**: Azure OpenAI, **Google Vertex AI**
+  (path GCP con service account para Gemini; el path AI Studio sí
+  está en MVP §9.3), Mistral, AWS Bedrock. Contemplados pero fuera
+  MVP.
 - **Prompt caching / context caching**. Anthropic lo ofrece; puede
   reducir costo 10× en Managed. Post-MVP v0.3.
 - **Batching**. Algunos workers de ingesta podrían batchear N
@@ -1329,6 +1400,51 @@ GrowthBook.
   invariantes de §2 requiere nueva ronda de peer review + re-
   firma. `packages/llm-client/` queda habilitado para
   implementación.
+- **v1.1** (2026-04-18) — Agrega **Google Gemini** como tercer
+  proveedor MVP. Cambios aditivos, **NO toca los 8 invariantes de
+  §2**, §5 (crypto) ni §8 (accounting) — por eso no requiere
+  nueva ronda de peer review externo, solo firma de Jean en este
+  changelog (regla de `feedback_foco_three_contracts_rule.md`).
+  Scope estricto:
+  1. **§1.1** — menciona Gemini en la lista de APIs generativas
+     cubiertas.
+  2. **§3.1** — añade `gemini.ts` al tree del paquete.
+  3. **§3.3** — `NormalizedLLMRequest.model` extiende con
+     `'gemini-2.5-pro'` y `'gemini-2.5-flash'`; `providerHint`
+     extiende con `'gemini'`.
+  4. **§3.4** — `LLMCallOutput.providerUsed` extiende con
+     `'gemini'`.
+  5. **§4.2** — métrica `llm_circuit_state` añade la etiqueta
+     `provider="gemini"`.
+  6. **§9.3 NUEVA** — "Google Gemini (AI Studio / Gemini API
+     directa)": endpoint `generativelanguage.googleapis.com`,
+     auth vía header `x-goog-api-key` (NO query param, para no
+     loggear la key en balancers/CDN — invariante #1),
+     peculiaridades del wire format (`contents` en vez de
+     `messages`, `'model'` en vez de `'assistant'`,
+     `systemInstruction` separado, `generationConfig`,
+     `usageMetadata`, mapeo de `finishReason` a `stopReason` /
+     `content_blocked`), mapeo de errores (`INVALID_ARGUMENT`,
+     `RESOURCE_EXHAUSTED`, `PERMISSION_DENIED`).
+  7. **§9.3 (antigua)** — renumerada a **§9.4** (interface
+     `Provider`); se expande `Provider.name` a `'anthropic' |
+     'openai' | 'gemini'` y se documenta que agregar proveedor
+     requiere extender también `providerHint` y
+     `providerUsed`.
+  8. **§15** — explicita que **Vertex AI queda fuera del MVP**
+     aunque Gemini (vía AI Studio) entra. Decisión
+     deliberada: Vertex requeriría service account GCP y es
+     hostil para BYOK Free/Creator; el path AI Studio cubre
+     todos los casos de uso MVP.
+
+  **Flags GrowthBook no cambian**: circuit breaker, KMS retries,
+  DEK cache e idempotency son parametrizados por `provider` con
+  los mismos umbrales. Post-MVP se podría segmentar por
+  proveedor si los SLOs divergen — no hoy.
+
+  **No resuelve decisión abierta #3** sobre nombres `gpt-5`
+  (sigue como placeholder hasta que OpenAI publique final). Las
+  otras 6 decisiones abiertas (§16 "Aún abiertas") quedan igual.
 
 ## 18 · Relación con otros documentos
 
@@ -1352,10 +1468,16 @@ GrowthBook.
 
 ---
 
-**Estado**: **SIGNED v1.0** (2026-04-18). Firmado por Jean Pierre
-Rojas tras dos pasadas de peer review externo aplicadas (v0.1→v0.2
-y v0.2→v0.3). Este doc es el cuarto contrato ancla de Foco junto
-con UX_FROZEN v1.3, INGEST_SECURITY v1.0 y PRODUCTION_READINESS
-v1.0. A partir de esta firma: `packages/llm-client/` queda
-habilitado para implementación, y cualquier cambio en los 8
-invariantes de §2 requiere nueva ronda de peer review + re-firma.
+**Estado**: **SIGNED v1.1** (2026-04-18). Firmado por Jean Pierre
+Rojas. Historial: v0.1→v0.2 (primer peer review externo, 6
+cambios), v0.2→v0.3 (segundo peer review externo, 7 cambios),
+v0.3→v1.0 (firma inicial), v1.0→v1.1 (extensión aditiva con
+Google Gemini como tercer proveedor MVP vía AI Studio). Este doc
+es el cuarto contrato ancla de Foco junto con UX_FROZEN v1.3,
+INGEST_SECURITY v1.0 y PRODUCTION_READINESS v1.0.
+`packages/llm-client/` queda habilitado para implementación con
+Anthropic + OpenAI + Gemini en MVP. Cualquier cambio en los 8
+invariantes de §2 requiere nueva ronda de peer review + re-firma;
+las extensiones aditivas (nuevos proveedores, nuevos modelos
+dentro de proveedores existentes) solo requieren bump minor +
+firma de Jean en changelog.
