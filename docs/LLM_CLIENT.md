@@ -1,9 +1,13 @@
 ---
-title: Foco · LLM_CLIENT v0.3
-status: DRAFT v0.3 (pendiente de firma v1.0)
+title: Foco · LLM_CLIENT v1.0
+status: SIGNED v1.0 (2026-04-18)
 date: 2026-04-18
 owner: Jean Pierre Rojas
-reviewer: Jean + AI peer review externo (primera y segunda pasadas aplicadas)
+signed_by: Jean Pierre Rojas — 2026-04-18
+reviewers:
+  - Jean Pierre Rojas (owner)
+  - AI peer review externo, pasada 1 (aplicada en v0.2)
+  - AI peer review externo, pasada 2 (aplicada en v0.3)
 depends_on:
   - docs/UX_FROZEN.md (v1.3)
   - docs/INGEST_SECURITY.md (v1.0)
@@ -34,10 +38,16 @@ changelog:
     validación de flags + fail-fast al arranque; nuevas métricas
     de shard distribution, stale cache hits y retry success ratio.
     1 decisión añadida como abierta (N8 — persistencia de
-    providerRequestId en idempotency cache). Pendiente firma v1.0.
+    providerRequestId en idempotency cache).
+  - v1.0 (2026-04-18): firma. Cuarto contrato ancla de Foco.
+    Contenido técnico idéntico a v0.3; solo bump de status. A
+    partir de ahora el doc es invariante — cualquier cambio en
+    los 8 invariantes de §2 requiere nueva ronda de peer review
+    + re-firma. `packages/llm-client/` habilitado para
+    implementación.
 ---
 
-# Foco · LLM_CLIENT v0.3
+# Foco · LLM_CLIENT v1.0
 
 > **Principio rector.** Foco trata a cada llamada a un LLM como un
 > **evento facturable con superficie de ataque**. Nunca hay plaintext
@@ -1309,9 +1319,16 @@ GrowthBook.
   idempotency cache para replay debugging — no bloqueante MVP.
   Añadido a §16 "Aún abiertas" como #7.
 
-  Pendiente: **firma v1.0 por Jean** (opción A acordada — sin
-  tercer peer review sobre §5.3 porque los cambios son
-  aclaratorios / cierran gaps, no introducen superficie nueva).
+  Opción A acordada — sin tercer peer review porque los cambios
+  son aclaratorios / cierran gaps, no introducen superficie nueva.
+- **v1.0** (2026-04-18) — **Firma**. Cuarto contrato ancla de
+  Foco firmado por Jean Pierre Rojas tras dos pasadas de peer
+  review externo aplicadas. Sin cambios técnicos respecto a
+  v0.3 más allá del frontmatter, título y este changelog. El
+  contenido queda invariante: cualquier modificación de los 8
+  invariantes de §2 requiere nueva ronda de peer review + re-
+  firma. `packages/llm-client/` queda habilitado para
+  implementación.
 
 ## 18 · Relación con otros documentos
 
@@ -1335,11 +1352,10 @@ GrowthBook.
 
 ---
 
-**Estado**: DRAFT v0.3 — **pendiente de firma v1.0 por Jean**.
-Los dos peer reviews externos fueron aplicados (6 cambios en v0.2
-+ 7 cambios en v0.3). Por decisión conjunta (opción A tras el
-segundo review) no se hace un tercer peer review: los cambios de
-v0.3 cierran gaps de completitud sin introducir superficie nueva
-que lo justifique. Next: Jean firma promoviendo `status: SIGNED
-v1.0` + fecha + reviewers en frontmatter. Solo entonces se abre
-`packages/llm-client/` para implementación.
+**Estado**: **SIGNED v1.0** (2026-04-18). Firmado por Jean Pierre
+Rojas tras dos pasadas de peer review externo aplicadas (v0.1→v0.2
+y v0.2→v0.3). Este doc es el cuarto contrato ancla de Foco junto
+con UX_FROZEN v1.3, INGEST_SECURITY v1.0 y PRODUCTION_READINESS
+v1.0. A partir de esta firma: `packages/llm-client/` queda
+habilitado para implementación, y cualquier cambio en los 8
+invariantes de §2 requiere nueva ronda de peer review + re-firma.
