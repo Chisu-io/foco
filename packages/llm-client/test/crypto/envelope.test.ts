@@ -1,0 +1,453 @@
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import {
+  DecryptCommand,
+  EncryptCommand,
+  KMSClient,
+} from '@aws-sdk/client-kms';
+import { mockClient } from 'aws-sdk-client-mock';
+
+import {
+  EnvelopeCrypto,
+  MAX_DEK_CACHE_TTL_MS,
+  type Envelope,
+  type EnvelopeDeps,
+} from '../../src/crypto/envelope.js';
+import { generateDek, zeroize } from '../../src/crypto/dek.js';
+import { kekAlias } from '../../src/crypto/kek.js';
+import { shardId } from '../../src/crypto/sharding.js';
+import { InMemoryMetrics } from '../../src/observability/metrics.js';
+
+const kmsMock = mockClient(KMSClient);
+
+/**
+ * Helper — builds an EnvelopeCrypto with a fully fake clock and a
+ * mutable kekVersion so rotation scenarios are controllable.
+ */
+function makeEnvCrypto(overrides: {
+  readonly cacheTtlMs?: number;
+  readonly initialKekVersion?: number;
+} = {}): {
+  env: EnvelopeCrypto;
+  metrics: InMemoryMetrics;
+  clock: { t: number };
+  versionBox: { v: number };
+} {
+  const metrics = new InMemoryMetrics();
+  const clock = { t: 10_000 };
+  const versionBox = { v: overrides.initialKekVersion ?? 1 };
+
+  const deps: EnvelopeDeps = {
+    kms: new KMSClient({ region: 'us-east-1' }),
+    metrics,
+    now: () => clock.t,
+    currentKekVersion: () => versionBox.v,
+    cacheTtlMs: overrides.cacheTtlMs ?? 60_000,
+    sleep: async (ms) => {
+      clock.t += ms;
+    },
+    jitterMs: (min, max) => Math.floor((min + max) / 2),
+  };
+
+  return { env: new EnvelopeCrypto(deps), metrics, clock, versionBox };
+}
+
+beforeEach(() => {
+  kmsMock.reset();
+});
+afterEach(() => {
+  kmsMock.reset();
+});
+
+describe('EnvelopeCrypto.ctor', () => {
+  it('rejects TTL above the §16 hard-cap', () => {
+    expect(
+      () =>
+        new EnvelopeCrypto({
+          kms: new KMSClient({ region: 'us-east-1' }),
+          metrics: new InMemoryMetrics(),
+          now: () => 0,
+          currentKekVersion: () => 1,
+          cacheTtlMs: MAX_DEK_CACHE_TTL_MS + 1,
+        }),
+    ).toThrow(/hard-cap/);
+  });
+
+  it('rejects negative / NaN TTL', () => {
+    const base = {
+      kms: new KMSClient({ region: 'us-east-1' }),
+      metrics: new InMemoryMetrics(),
+      now: () => 0,
+      currentKekVersion: () => 1,
+    };
+    expect(() => new EnvelopeCrypto({ ...base, cacheTtlMs: -1 })).toThrow();
+    expect(
+      () => new EnvelopeCrypto({ ...base, cacheTtlMs: Number.NaN }),
+    ).toThrow();
+  });
+});
+
+describe('EnvelopeCrypto.wrap', () => {
+  it('produces an envelope with all fields and a KMS-encrypted DEK', async () => {
+    kmsMock.on(EncryptCommand).resolves({
+      CiphertextBlob: new Uint8Array([0xaa, 0xbb]),
+    });
+
+    const { env } = makeEnvCrypto();
+    const res = await env.wrap({
+      userId: 'user-1',
+      keyPlaintext: Buffer.from('sk-ant-xxxx-yyyy', 'utf8'),
+    });
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    const e = res.value;
+    expect(e.kekVersion).toBe(1);
+    expect(e.shardId).toBe(shardId('user-1', 1));
+    expect(Array.from(e.dekCiphertext)).toEqual([0xaa, 0xbb]);
+    expect(e.keyNonce.length).toBe(12);
+    expect(e.keyAuthTag.length).toBe(16);
+    expect(e.keyCiphertext.length).toBeGreaterThan(0);
+
+    // Verify KMS was called with the correct alias.
+    const call = kmsMock.commandCalls(EncryptCommand)[0]!;
+    expect(call.args[0].input.KeyId).toBe(
+      kekAlias({ kekVersion: 1, shardId: e.shardId }),
+    );
+  });
+
+  it('does NOT populate the cache on wrap (cross-process safety)', async () => {
+    kmsMock.on(EncryptCommand).resolves({
+      CiphertextBlob: new Uint8Array([1]),
+    });
+    const { env } = makeEnvCrypto();
+    await env.wrap({
+      userId: 'user-1',
+      keyPlaintext: Buffer.from('sk-ant'),
+    });
+    expect(env.size).toBe(0);
+  });
+
+  it('propagates non-transient KMS failure up as the error variant', async () => {
+    const e = Object.assign(new Error('denied'), {
+      name: 'AccessDeniedException',
+    });
+    kmsMock.on(EncryptCommand).rejects(e);
+
+    const { env } = makeEnvCrypto();
+    const res = await env.wrap({
+      userId: 'user-1',
+      keyPlaintext: Buffer.from('k'),
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.error.kind).toBe('kms_unavailable');
+      if (res.error.kind === 'kms_unavailable') {
+        expect(res.error.transient).toBe(false);
+      }
+    }
+  });
+
+  it('rejects empty userId', async () => {
+    const { env } = makeEnvCrypto();
+    const res = await env.wrap({
+      userId: '',
+      keyPlaintext: Buffer.from('k'),
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error.kind).toBe('internal');
+  });
+});
+
+/**
+ * Helper to build a valid envelope + DEK pair using a fixed DEK so
+ * both wrap and unwrap can operate against a mocked KMS.
+ */
+async function buildEnvelope(opts: {
+  userId: string;
+  keyPlaintext: Buffer;
+  kekVersion: number;
+  dek?: Buffer;
+}): Promise<{ envelope: Envelope; dek: Buffer }> {
+  const dek = opts.dek ?? generateDek();
+  const { encryptWithDek } = await import('../../src/crypto/dek.js');
+  const body = encryptWithDek(opts.keyPlaintext, dek);
+  const envelope: Envelope = {
+    kekVersion: opts.kekVersion,
+    shardId: shardId(opts.userId, opts.kekVersion),
+    // `dekCiphertext` is an opaque marker here; the KMS mock returns
+    // the real DEK back regardless of what goes in.
+    dekCiphertext: new Uint8Array([0xde, 0xad, 0xbe, 0xef]),
+    keyCiphertext: new Uint8Array(body.ciphertext),
+    keyNonce: new Uint8Array(body.nonce),
+    keyAuthTag: new Uint8Array(body.authTag),
+  };
+  return { envelope, dek };
+}
+
+describe('EnvelopeCrypto.unwrap', () => {
+  it('returns the user plaintext on cache miss + KMS success', async () => {
+    const userId = 'user-1';
+    const key = Buffer.from('sk-ant-user-key', 'utf8');
+    const { envelope, dek } = await buildEnvelope({
+      userId,
+      keyPlaintext: key,
+      kekVersion: 1,
+    });
+    kmsMock.on(DecryptCommand).resolves({ Plaintext: new Uint8Array(dek) });
+
+    const { env, metrics } = makeEnvCrypto();
+    const res = await env.unwrap({ userId, envelope });
+
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.value.equals(key)).toBe(true);
+    expect(metrics.readCounter('llm_dek_cache_misses_total')).toBe(1);
+    expect(metrics.readCounter('llm_dek_cache_hits_total')).toBe(0);
+    expect(env.size).toBe(1);
+  });
+
+  it('serves subsequent calls from cache (no second KMS hit)', async () => {
+    const userId = 'user-1';
+    const key = Buffer.from('sk-ant-user-key', 'utf8');
+    const { envelope, dek } = await buildEnvelope({
+      userId,
+      keyPlaintext: key,
+      kekVersion: 1,
+    });
+    kmsMock.on(DecryptCommand).resolves({ Plaintext: new Uint8Array(dek) });
+
+    const { env, metrics } = makeEnvCrypto();
+    await env.unwrap({ userId, envelope });
+    await env.unwrap({ userId, envelope });
+    await env.unwrap({ userId, envelope });
+
+    expect(kmsMock.commandCalls(DecryptCommand).length).toBe(1);
+    expect(metrics.readCounter('llm_dek_cache_misses_total')).toBe(1);
+    expect(metrics.readCounter('llm_dek_cache_hits_total')).toBe(2);
+  });
+
+  it('evicts + zeroises on TTL expiry and re-fetches DEK', async () => {
+    const userId = 'user-1';
+    const key = Buffer.from('sk-ant-user-key', 'utf8');
+    const { envelope, dek } = await buildEnvelope({
+      userId,
+      keyPlaintext: key,
+      kekVersion: 1,
+    });
+    // Use callsFake to return a FRESH Uint8Array per call — matches
+    // real KMS behaviour. `.resolves(value)` shares the same reference
+    // across calls, which would be zeroised by envelope.ts after the
+    // first Decrypt (hygiene per §2 invariant 1: no key plaintext
+    // outside our owned Buffer) and break the second call.
+    kmsMock
+      .on(DecryptCommand)
+      .callsFake(() => ({ Plaintext: new Uint8Array(dek) }));
+
+    const { env, metrics, clock } = makeEnvCrypto({ cacheTtlMs: 1_000 });
+    await env.unwrap({ userId, envelope });
+    // Advance past TTL.
+    clock.t += 2_000;
+    const res = await env.unwrap({ userId, envelope });
+    expect(res.ok).toBe(true);
+
+    expect(kmsMock.commandCalls(DecryptCommand).length).toBe(2);
+    expect(
+      metrics.readCounter('llm_dek_cache_evictions_total', { reason: 'ttl' }),
+    ).toBe(1);
+    expect(metrics.readCounter('llm_dek_cache_misses_total')).toBe(2);
+  });
+
+  it('sweepExpired evicts and zeroises in bulk', async () => {
+    const userId = 'user-1';
+    const { envelope, dek } = await buildEnvelope({
+      userId,
+      keyPlaintext: Buffer.from('k'),
+      kekVersion: 1,
+    });
+    kmsMock.on(DecryptCommand).resolves({ Plaintext: new Uint8Array(dek) });
+
+    const { env, metrics, clock } = makeEnvCrypto({ cacheTtlMs: 500 });
+    await env.unwrap({ userId, envelope });
+    clock.t += 1_000;
+    const removed = env.sweepExpired();
+    expect(removed).toBe(1);
+    expect(env.size).toBe(0);
+    expect(
+      metrics.readCounter('llm_dek_cache_evictions_total', { reason: 'ttl' }),
+    ).toBe(1);
+  });
+
+  it('counts a stale_hit when a different kekVersion is cached for same userId', async () => {
+    const userId = 'user-1';
+    const { envelope: v1env, dek: v1dek } = await buildEnvelope({
+      userId,
+      keyPlaintext: Buffer.from('key'),
+      kekVersion: 1,
+    });
+    const { envelope: v2env, dek: v2dek } = await buildEnvelope({
+      userId,
+      keyPlaintext: Buffer.from('key'),
+      kekVersion: 1, // fabricate envelope shape but stamp v2 below
+    });
+
+    // Force the new envelope to claim kekVersion=2 (shardId may or
+    // may not match — that's fine for this test, we only care about
+    // the cache-level stale detection).
+    const v2 = { ...v2env, kekVersion: 2 } as Envelope;
+
+    kmsMock.on(DecryptCommand).callsFake((input) => {
+      const keyId = (input as { KeyId?: string }).KeyId ?? '';
+      if (keyId.includes('/v1/')) return { Plaintext: new Uint8Array(v1dek) };
+      if (keyId.includes('/v2/')) return { Plaintext: new Uint8Array(v2dek) };
+      throw new Error(`unexpected alias ${keyId}`);
+    });
+
+    const { env, metrics } = makeEnvCrypto();
+    // Prime v1.
+    const r1 = await env.unwrap({ userId, envelope: v1env });
+    expect(r1.ok).toBe(true);
+    // Now unwrap v2 — triggers stale detection for the v1 entry.
+    const r2 = await env.unwrap({ userId, envelope: v2 });
+    expect(r2.ok).toBe(true);
+
+    expect(
+      metrics.readCounter('llm_dek_cache_stale_hits_total', {
+        reason: 'version_mismatch',
+      }),
+    ).toBe(1);
+    expect(
+      metrics.readCounter('llm_dek_cache_evictions_total', { reason: 'stale' }),
+    ).toBe(1);
+  });
+
+  it('invalidateUserKey purges every version for that user', async () => {
+    const userId = 'user-1';
+    const { envelope: v1env, dek: v1dek } = await buildEnvelope({
+      userId,
+      keyPlaintext: Buffer.from('key'),
+      kekVersion: 1,
+    });
+    kmsMock.on(DecryptCommand).resolves({ Plaintext: new Uint8Array(v1dek) });
+
+    const { env, metrics } = makeEnvCrypto();
+    await env.unwrap({ userId, envelope: v1env });
+    expect(env.size).toBe(1);
+
+    const removed = env.invalidateUserKey(userId);
+    expect(removed).toBe(1);
+    expect(env.size).toBe(0);
+    expect(
+      metrics.readCounter('llm_dek_cache_evictions_total', { reason: 'manual' }),
+    ).toBe(1);
+  });
+
+  it('invalidateUserKey does not touch other users', async () => {
+    const { envelope: eA, dek: dA } = await buildEnvelope({
+      userId: 'alice',
+      keyPlaintext: Buffer.from('ka'),
+      kekVersion: 1,
+    });
+    const { envelope: eB, dek: dB } = await buildEnvelope({
+      userId: 'bob',
+      keyPlaintext: Buffer.from('kb'),
+      kekVersion: 1,
+    });
+
+    kmsMock.on(DecryptCommand).callsFake((input) => {
+      const keyId = (input as { KeyId?: string }).KeyId ?? '';
+      const sA = kekAlias({ kekVersion: 1, shardId: shardId('alice', 1) });
+      if (keyId === sA) return { Plaintext: new Uint8Array(dA) };
+      return { Plaintext: new Uint8Array(dB) };
+    });
+
+    const { env } = makeEnvCrypto();
+    await env.unwrap({ userId: 'alice', envelope: eA });
+    await env.unwrap({ userId: 'bob', envelope: eB });
+    expect(env.size).toBe(2);
+
+    const removed = env.invalidateUserKey('alice');
+    expect(removed).toBe(1);
+    expect(env.size).toBe(1);
+  });
+
+  it('maps a tampered body to internal', async () => {
+    const userId = 'user-1';
+    const { envelope, dek } = await buildEnvelope({
+      userId,
+      keyPlaintext: Buffer.from('key'),
+      kekVersion: 1,
+    });
+    kmsMock.on(DecryptCommand).resolves({ Plaintext: new Uint8Array(dek) });
+
+    const tampered: Envelope = {
+      ...envelope,
+      keyCiphertext: new Uint8Array(
+        Array.from(envelope.keyCiphertext, (b) => b ^ 0x01),
+      ),
+    };
+
+    const { env } = makeEnvCrypto();
+    const res = await env.unwrap({ userId, envelope: tampered });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error.kind).toBe('internal');
+  });
+
+  it('propagates KMS non-transient failure without touching cache', async () => {
+    const userId = 'user-1';
+    const { envelope } = await buildEnvelope({
+      userId,
+      keyPlaintext: Buffer.from('k'),
+      kekVersion: 1,
+    });
+    kmsMock.on(DecryptCommand).rejects(
+      Object.assign(new Error('denied'), { name: 'AccessDeniedException' }),
+    );
+
+    const { env } = makeEnvCrypto();
+    const res = await env.unwrap({ userId, envelope });
+    expect(res.ok).toBe(false);
+    expect(env.size).toBe(0);
+  });
+
+  it('rejects empty userId', async () => {
+    const { env } = makeEnvCrypto();
+    const { envelope } = await buildEnvelope({
+      userId: 'x',
+      keyPlaintext: Buffer.from('k'),
+      kekVersion: 1,
+    });
+    const res = await env.unwrap({ userId: '', envelope });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error.kind).toBe('internal');
+  });
+
+  it('wrap → unwrap roundtrip through EnvelopeCrypto', async () => {
+    // Track the (DEK, encrypted) pair so the mock can return the
+    // right plaintext on decrypt.
+    let capturedDek: Uint8Array | null = null;
+    kmsMock.on(EncryptCommand).callsFake((input) => {
+      const pt = (input as { Plaintext?: Uint8Array }).Plaintext!;
+      capturedDek = new Uint8Array(pt); // copy before zeroise
+      return { CiphertextBlob: new Uint8Array([1, 2, 3, 4]) };
+    });
+    kmsMock.on(DecryptCommand).callsFake(() => {
+      if (!capturedDek) throw new Error('encrypt first');
+      return { Plaintext: new Uint8Array(capturedDek) };
+    });
+
+    const { env } = makeEnvCrypto();
+    const plaintext = Buffer.from('sk-ant-full-roundtrip', 'utf8');
+    const wrapped = await env.wrap({ userId: 'user-1', keyPlaintext: plaintext });
+    expect(wrapped.ok).toBe(true);
+    if (!wrapped.ok) return;
+
+    const unwrapped = await env.unwrap({
+      userId: 'user-1',
+      envelope: wrapped.value,
+    });
+    expect(unwrapped.ok).toBe(true);
+    if (unwrapped.ok) {
+      expect(unwrapped.value.equals(plaintext)).toBe(true);
+      zeroize(unwrapped.value);
+    }
+  });
+});

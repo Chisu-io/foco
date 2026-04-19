@@ -40,6 +40,14 @@
     "./config": {
       "types": "./src/config/index.ts",
       "import": "./src/config/index.ts"
+    },
+    "./crypto": {
+      "types": "./src/crypto/index.ts",
+      "import": "./src/crypto/index.ts"
+    },
+    "./observability": {
+      "types": "./src/observability/index.ts",
+      "import": "./src/observability/index.ts"
     }
   },
   "publishConfig": {
@@ -57,6 +65,14 @@
       "./config": {
         "types": "./dist/config/index.d.ts",
         "import": "./dist/config/index.js"
+      },
+      "./crypto": {
+        "types": "./dist/crypto/index.d.ts",
+        "import": "./dist/crypto/index.js"
+      },
+      "./observability": {
+        "types": "./dist/observability/index.d.ts",
+        "import": "./dist/observability/index.js"
       }
     }
   },
@@ -75,11 +91,14 @@
     "clean": "rm -rf dist .turbo coverage"
   },
   "dependencies": {
+    "@aws-sdk/client-kms": "^3.900.0",
     "zod": "^3.25.0"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
     "@vitest/coverage-v8": "^3.0.0",
+    "aws-sdk-client-mock": "^4.1.0",
+    "fast-check": "^4.0.0",
     "vitest": "^3.0.0"
   },
   "engines": {

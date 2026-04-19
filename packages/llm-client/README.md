@@ -6,10 +6,11 @@ anchor contract of Foco.
 
 ## Status
 
-Iteration 1 of 9 (see `project_foco_llm_client_implementation_plan`).
-**Not production-ready yet.** This iteration ships the error taxonomy
-and flag config layer; the client itself (`LLMClient.call()`) lands in
-Iteration 7.
+Iteration 2 of 9 (see `project_foco_llm_client_implementation_plan`).
+**Not production-ready yet.** Iteration 1 shipped the error taxonomy
+and flag config layer; Iteration 2 ships the envelope-encryption
+crypto layer (KEK-per-shard, DEK cache TTL ≤300 s, zeroisation). The
+client itself (`LLMClient.call()`) lands in Iteration 7.
 
 ## Scope
 
@@ -43,6 +44,20 @@ import {
   validateFlags,
   loadFlagsWithFallback,
   FlagValidationError,
+  // Crypto layer (§5)
+  EnvelopeCrypto,
+  MAX_DEK_CACHE_TTL_MS,
+  shardId,
+  shardCountFor,
+  kekAlias,
+  generateDek,
+  zeroize,
+  // Observability
+  NOOP_METRICS,
+  InMemoryMetrics,
+  // Shared result
+  ok,
+  err,
 } from '@chisu/llm-client';
 ```
 
@@ -62,6 +77,14 @@ current surface:
    and `llm.dek_cache.ttl_seconds ≤ 300` as invariants of the doc,
    **not** runtime-adjustable. Raising them requires a PR to
    `LLM_CLIENT.md`, not a GrowthBook toggle.
+4. **No circuit breaker over KMS.** `kek.ts` retries at most once
+   (`KMS_MAX_ATTEMPTS = 2`) with 50–250 ms jitter; on transient
+   failure after the retry budget, or on non-transient error, we
+   fail-close. A CB over KMS would only add latency (§2 invariant 5).
+5. **Cache key = `(userId, kekVersion)`.** Stale entries from a past
+   rotation are zeroised and evicted on the next `unwrap`, counted as
+   `llm_dek_cache_stale_hits_total{reason=version_mismatch}` (§2
+   invariant 8).
 
 ## Development
 
