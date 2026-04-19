@@ -48,6 +48,18 @@
     "./observability": {
       "types": "./src/observability/index.ts",
       "import": "./src/observability/index.ts"
+    },
+    "./http": {
+      "types": "./src/http/index.ts",
+      "import": "./src/http/index.ts"
+    },
+    "./providers": {
+      "types": "./src/providers/index.ts",
+      "import": "./src/providers/index.ts"
+    },
+    "./types": {
+      "types": "./src/types/index.ts",
+      "import": "./src/types/index.ts"
     }
   },
   "publishConfig": {
@@ -73,6 +85,18 @@
       "./observability": {
         "types": "./dist/observability/index.d.ts",
         "import": "./dist/observability/index.js"
+      },
+      "./http": {
+        "types": "./dist/http/index.d.ts",
+        "import": "./dist/http/index.js"
+      },
+      "./providers": {
+        "types": "./dist/providers/index.d.ts",
+        "import": "./dist/providers/index.js"
+      },
+      "./types": {
+        "types": "./dist/types/index.d.ts",
+        "import": "./dist/types/index.js"
       }
     }
   },
