@@ -68,4 +68,11 @@ temp/
 .changeset/*.md
 !.changeset/README.md
 !.changeset/config.json
+
+# Sandbox-only overrides (never commit — reproducible builds rely on
+# the tracked tsconfig.json per package, not environment-specific
+# typeRoots/paths hacks).
+tsconfig.sandbox.json
+
+# Scratch commit-message staging (Jean passes these to `git commit -F`)
 .cmsgs/
