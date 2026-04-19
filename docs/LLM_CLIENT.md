@@ -1,9 +1,9 @@
 ---
-title: Foco · LLM_CLIENT v0.2
-status: DRAFT v0.2 (pendiente de segundo peer review + firma)
+title: Foco · LLM_CLIENT v0.3
+status: DRAFT v0.3 (pendiente de firma v1.0)
 date: 2026-04-18
 owner: Jean Pierre Rojas
-reviewer: Jean + AI peer review externo (primera pasada aplicada)
+reviewer: Jean + AI peer review externo (primera y segunda pasadas aplicadas)
 depends_on:
   - docs/UX_FROZEN.md (v1.3)
   - docs/INGEST_SECURITY.md (v1.0)
@@ -23,10 +23,21 @@ changelog:
     Idempotency corrige semántica (no garantiza output textual
     idéntico). Token accounting BYOK explicita razonamiento.
     Circuit breaker thresholds migran a flags GrowthBook.
-    Pendiente segundo peer review (scope: diff v0.1→v0.2) + firma.
+  - v0.3 (2026-04-18): aplica 7 cambios del segundo peer review
+    externo (3 críticos + 3 importantes + 1 nice-to-have). Clarifica
+    que NO hay circuit breaker sobre KMS (fail-closed directo);
+    añade `kekVersion` al envelope + estrategia de rebalance
+    offline; cache key pasa a `(userId, kekVersion)` con
+    invalidación completa; deadline propagation desde span padre
+    + budget de retry fijo (no flag-configurable a >1); modo
+    consent-minimal en token accounting BYOK; tabla min/max de
+    validación de flags + fail-fast al arranque; nuevas métricas
+    de shard distribution, stale cache hits y retry success ratio.
+    1 decisión añadida como abierta (N8 — persistencia de
+    providerRequestId en idempotency cache). Pendiente firma v1.0.
 ---
 
-# Foco · LLM_CLIENT v0.2
+# Foco · LLM_CLIENT v0.3
 
 > **Principio rector.** Foco trata a cada llamada a un LLM como un
 > **evento facturable con superficie de ataque**. Nunca hay plaintext
@@ -113,6 +124,14 @@ con invariantes de seguridad que nunca deben depender del plan.
    Foco sin `preferMyKey` explícito). La métrica
    `llm_kms_induced_failures_total` aísla fallos imputables a KMS
    de fallos del proveedor LLM.
+   **Crítico — NO existe circuit breaker sobre KMS**: el circuit
+   breaker (§4.2) aplica exclusivamente a proveedores LLM
+   (Anthropic, OpenAI). Sobre KMS el manejo es fail-closed directo
+   con retry budget **fijo = 1** (no configurable a >1 vía flag,
+   para evitar amplificación de carga sobre una región degradada;
+   ver §4.3 y §13.2). La razón: un "CB abierto sobre KMS" no
+   ayudaría — no hay fallback criptográfico posible, y abrirlo
+   solo agregaría latencia sin cambiar outcome.
 6. **Token accounting para todos**, no sólo Managed. En BYOK
    contamos tokens para UI de uso en `settings-integraciones`,
    detección de abuso, y analytics — no para billing.
@@ -128,6 +147,13 @@ con invariantes de seguridad que nunca deben depender del plan.
    (Redis, Memcached), serialización a disco o snapshot, y
    cualquier transmisión fuera del proceso. El cache es
    thread-local o per-event-loop, nunca global compartido.
+   **Clave del cache = `(userId, kekVersion)`** (no solo `userId`):
+   ante rotación de KEK o rebalance de shard la entrada vieja queda
+   huérfana y se evicciona por TTL o por invalidación explícita
+   (`invalidateUserKey` limpia **todas** las entradas del usuario,
+   no solo la actual). Cada stale hit se contabiliza en
+   `llm_dek_cache_stale_hits_total` para observar rotaciones
+   incompletas.
    **Threat model explícito**: un worker comprometido puede
    exfiltrar keys de sus usuarios activos durante una ventana
    ≤5min (el TTL acota el radio); un compromiso de Redis, disco,
@@ -402,6 +428,32 @@ Retries internos del cliente (distintos de idempotency):
   `kms_unavailable { transient: false }`, `plan_requires_key`,
   `routing_disabled`.
 
+**Deadline propagation (protección contra amplificación de
+carga)**. Todo retry respeta el deadline del span padre de
+OpenTelemetry:
+
+- Si el span padre tiene `deadline` explícito y
+  `timeout_remaining < (max_jitter_ms + latencia_esperada_p95)`,
+  el retry **se suprime** y el error se propaga inmediato. Esto
+  evita que el retry cueste más de lo que al caller le queda de
+  presupuesto de tiempo y evita amplificar carga sobre un
+  downstream degradado cuando el cliente de todos modos ya habrá
+  timed-out.
+- En código: cada call path lee `traceparent.deadline` (o en su
+  defecto `AbortSignal.timeout_remaining`) antes de decidir
+  reintentar.
+- Métrica: `llm_retries_skipped_deadline_total{reason=...}` para
+  observar cuántos retries se suprimen por deadline propagation.
+
+**Retry budget KMS fijo (no flag-configurable a >1)**. El flag
+`llm.kms.retry_count` existe en §16 pero su validación al arranque
+(§16 "Validación de flags") impone `max = 1`. Razón operativa: un
+retry = ok; 2+ retries simultáneos desde N workers amplifican la
+presión sobre una región KMS ya degradada y alargan el radio del
+incidente. Si se necesitara subir más allá de 1 en una emergencia,
+requiere PR al doc + deploy (cambio auditable en git), no un toggle
+de flag.
+
 ## 5 · Envelope encryption de keys BYOK
 
 ### 5.1 Modelo criptográfico
@@ -410,8 +462,9 @@ Dos niveles:
 
 - **KEK (Key Encryption Key)**: **una por shard** de ~1.000
   usuarios (asignación determinística:
-  `shardId = hash(userId) mod N`, con N dimensionado para mantener
-  ~1k users/shard). Vive en **AWS KMS** (decisión cerrada v0.2,
+  `shardId = hash(userId, kekVersion) mod N`, con N dimensionado
+  para mantener ~1k users/shard **dentro de una `kekVersion`
+  dada**). Vive en **AWS KMS** (decisión cerrada v0.2,
   ver §5.2). Nunca sale del HSM en claro. Se invoca para
   operaciones `Encrypt` / `Decrypt` sobre DEKs; nunca sobre la key
   de usuario directamente. **Rationale de shard**: KEK por usuario
@@ -420,6 +473,15 @@ Dos niveles:
   ~$0.001/user manteniendo blast radius acotado (un KEK
   comprometido = re-wrap de ~1k users, no toda la plataforma).
   Ver cálculo explícito en §5.2.
+
+  **Sharding version (`kekVersion`)**: cada DEK persiste junto con
+  el `kekVersion` bajo el cual su `shardId` fue calculado. `N` (el
+  número de shards) es **inmutable dentro de una `kekVersion`**; si
+  el crecimiento de usuarios requiere rebalance (ej. de N=10 a
+  N=100 al pasar de 10k a 100k usuarios activos), se introduce
+  `kekVersion = prev + 1` con nuevo `N`, y las DEKs migran a la
+  nueva versión por **re-wrap offline en batch** (ver §5.3
+  "Rebalance"). Nunca se hace un rehash sobre `kekVersion` vigente.
 - **DEK (Data Encryption Key)**: generada aleatoriamente (AES-256
   via `crypto.randomBytes(32)`) cada vez que el usuario *agrega* o
   *rota* su key BYOK. Cifra la key del proveedor con AES-256-GCM.
@@ -434,13 +496,16 @@ Flujo al **agregar** una key BYOK:
 3. Edge genera DEK = randomBytes(32).
 4. Edge cifra key_plaintext con DEK (AES-256-GCM, nonce aleatorio).
    -> { ciphertext, nonce, authTag }
-5. Edge calcula `shardId = hash(userId) mod N` y pide a KMS:
-   Encrypt(kekAlias=`foco/kek/shard-${shardId}`, DEK).
-   -> { dekCiphertext, kekVersion }
+5. Edge lee `kekVersion = current_kek_version()` (global, leído
+   de config de deploy; single source of truth). Calcula
+   `shardId = hash(userId, kekVersion) mod N(kekVersion)` y pide
+   a KMS: Encrypt(
+     kekAlias=`foco/kek/v${kekVersion}/shard-${shardId}`, DEK
+   ) -> dekCiphertext.
 6. DB insert a `user_llm_key`:
    {
-     userId, shardId, provider, keyCiphertext, keyNonce, keyAuthTag,
-     dekCiphertext, kekVersion,
+     userId, kekVersion, shardId, provider,
+     keyCiphertext, keyNonce, keyAuthTag, dekCiphertext,
      maskedHint: 'sk-ant-...xY7q',  // últimos 4 chars para UI
      status: 'pending_validation',
      createdAt, updatedAt
@@ -453,22 +518,32 @@ Flujo al **agregar** una key BYOK:
 Flujo al **leer** una key en runtime (dentro de `LLMClient.call()`):
 
 ```
-1. Worker fetch de row `user_llm_key` por userId (incluye shardId).
-2. Worker consulta cache in-process (`dek_cache`) con key=userId.
-   Hit: salta al paso 4 con DEK del cache. Miss: pide a KMS.
+1. Worker fetch de row `user_llm_key` por userId. Row incluye
+   {kekVersion, shardId, dekCiphertext, keyCiphertext, ...}.
+2. Worker consulta cache in-process (`dek_cache`) con
+   key = (userId, kekVersion). Hit: salta al paso 4 con DEK del
+   cache. Miss por kekVersion distinta (row re-wrapped por
+   rotación/rebalance): cuenta como stale_hit
+   (`llm_dek_cache_stale_hits_total{reason=version_mismatch}`),
+   purga la entrada vieja del userId, sigue a paso 3.
 3. Worker pide a KMS: Decrypt(
-     kekAlias=`foco/kek/shard-${shardId}`,
-     dekCiphertext, kekVersion
-   ) -> DEK. Si KMS falla con error transitorio, 1 retry con
-   jitter 50–250ms (ver §2 invariante 5). Si falla otra vez,
-   fail-closed con `kms_unavailable`.
+     kekAlias=`foco/kek/v${kekVersion}/shard-${shardId}`,
+     dekCiphertext
+   ) -> DEK. Si KMS falla con error transitorio **y el deadline
+   del span padre lo permite** (ver §4.3 "Deadline propagation"),
+   1 retry con jitter 50–250ms. Si el retry falla o el deadline
+   no alcanza, fail-closed con `kms_unavailable`.
 4. Worker descifra keyCiphertext con DEK -> key_plaintext.
 5. Worker usa key_plaintext durante el request HTTP al proveedor;
    al cerrar el request, zeroiza key_plaintext con `buffer.fill(0)`
    sobre el buffer original.
 6. DEK permanece en cache in-process del worker con TTL ≤5 min
    (configurable vía flag `llm.dek_cache.ttl_seconds`, default
-   300). Al eviction, se zeroiza también. El cache NO es
+   300; ver §16 "Validación de flags" para bounds). Al eviction,
+   se zeroiza también. Al invocar `invalidateUserKey(userId)` se
+   purgan **todas** las entradas del cache cuya primera
+   componente sea ese userId, sin importar la `kekVersion`
+   (invalidación cross-version completa). El cache NO es
    distribuido, NO se serializa, NO cruza procesos. Ver §2
    invariante 8 para el threat model.
 ```
@@ -510,15 +585,52 @@ criptográfico.
 
 ### 5.3 Rotación y revocación
 
-**KEK rotation** (tenant-level, cada 12 meses o a demanda):
+**KEK rotation** (tenant-level, cada 12 meses o a demanda, **sin
+cambio de `N` shards**):
 
-- Nueva KEK-v2 creada en KMS, alias apuntado a v2.
+- Nueva KEK-v2 creada en KMS, alias
+  `foco/kek/v2/shard-${shardId}` creado para cada shard; la
+  partición `N` permanece idéntica.
 - DEKs existentes permanecen cifradas con KEK-v1 (`kekVersion=1`).
 - En la próxima `.call()` de ese usuario, si `kekVersion < current`,
   el cliente re-cifra la DEK con KEK-v2 y hace UPDATE atómico de la
-  row. Rotación perezosa.
+  row (incluyendo `kekVersion = 2`). Rotación perezosa. Cache
+  in-process invalida la entrada vieja como stale_hit (ver §5.1
+  flujo de lectura, paso 2).
 - KEK-v1 se marca `PendingDeletion` en KMS con ventana de 30 días
   (safety net en caso de bug de migración).
+
+**Rebalance de sharding** (cambio de `N`, típicamente cuando el
+volumen de usuarios crece 10×):
+
+- Rebalance es un evento **offline planificado**, no on-the-fly.
+  Se documenta en `docs/runbooks/llm-kek-rebalance.md` (pendiente,
+  owner: DevOps); aquí fijamos el contrato.
+- Un rebalance de `N_old → N_new` requiere una **nueva
+  `kekVersion`** (no re-usar la actual con más shards, porque
+  `hash(userId, kekVersion) mod N` cambiaría con `N` y romperían
+  todos los lookups en flight).
+- Procedimiento:
+  1. Crear KEK-v(k+1) con N_new shards en KMS.
+  2. Job batch offline lee cada row de `user_llm_key` con
+     `kekVersion = k`, descifra DEK con KEK-vk, calcula nuevo
+     `shardId_new = hash(userId, k+1) mod N_new`, re-cifra DEK con
+     KEK-v(k+1) correspondiente, UPDATE atómico de la row con
+     `{kekVersion = k+1, shardId = shardId_new, dekCiphertext =
+     nuevo}`.
+  3. Durante la ventana de rebalance (horas), lecturas concurrentes
+     siguen sirviéndose por `kekVersion` en la row (cada row apunta
+     a su versión vigente). Workers nuevos reciben nueva config de
+     `current_kek_version` tras finalizar el batch.
+  4. KEK-vk entra a `PendingDeletion` tras 30 días.
+- Invariante de rebalance: **un usuario nunca tiene dos rows
+  activas** — la transición de k→k+1 es UPDATE atómico, no
+  INSERT + DELETE. Query lookup siempre devuelve exactamente la
+  versión correcta.
+- Triggers: rebalance se considera cuando (a) promedio users/shard
+  > 2.000 (carga), (b) std-dev de shards > 30% del promedio (hot
+  shards detectados vía `llm_kek_shard_distribution`), o (c)
+  crecimiento proyectado del orden de magnitud en 90 días.
 
 **Key revocation** (el usuario quita su key en UI, o el proveedor
 la invalida):
@@ -646,6 +758,30 @@ Es consentimiento informado, no tracking encubierto. Esta posición
 está publicada en Privacy Policy (en construcción) y reforzada en
 el consent modal de `settings-integraciones` cuando el usuario
 agrega su primera key.
+
+**Dos modos de accounting según el consent** (el usuario controla
+explícitamente el nivel de telemetría sobre su uso BYOK):
+
+- **`consent_mode = 'full'`** (default al aceptar Privacy Policy):
+  se contabiliza todo lo descrito en §8.1 — `input_tokens`,
+  `output_tokens`, `model`, `origin`, `provider`, `latency_ms`.
+  Habilita la UI de uso detallada, detección de abuso, y analytics
+  agregadas.
+- **`consent_mode = 'minimal'`** (opt-out explícito en
+  `settings-integraciones → Privacidad`): solo se escribe una row
+  mínima a `llm_token_usage` con `{user_id, occurred_at, provider,
+  input_tokens = NULL, output_tokens = NULL}`. Queda `COUNT(*)` por
+  usuario/hora para detección de abuso (razón 2 arriba), pero la
+  UI de uso degrada a "X llamadas este mes" sin totales de tokens,
+  y las analytics agregadas excluyen a estos usuarios. La
+  detección de abuso por volumen de requests sigue funcionando; la
+  heurística de `tokens/hora` (§8.3) se salta para estos usuarios
+  y aplica solo `requests/hora`.
+
+El campo `user_llm_key.consent_mode = 'full' | 'minimal'` es
+auditable (`llm.consent_mode_changed` entry en `system_audit`).
+El usuario puede cambiar de modo en cualquier momento; el cambio
+aplica de ahí en adelante, sin migrar rows históricas.
 
 ### 8.1 Contadores por request
 
@@ -789,19 +925,35 @@ cualquier contenido de prompt/response bodies.
 ### 10.2 Métricas (Mimir via OTel)
 
 ```
-llm_calls_total{provider, funding_mode, origin, status}       counter
-llm_latency_ms{provider, model}                               histogram
-llm_tokens_total{provider, model, direction=in|out}           counter
-llm_errors_total{provider, kind}                              counter
-llm_circuit_state{provider}                                   gauge (0|1|2)
-llm_kms_latency_ms{operation=encrypt|decrypt}                 histogram
-llm_kms_induced_failures_total{operation, transient}          counter
-llm_kms_retries_total{operation, outcome=success|fail}        counter
-llm_key_invalidations_total{provider, reason}                 counter
-llm_dek_cache_hits_total{worker}                              counter
-llm_dek_cache_misses_total{worker}                            counter
-llm_dek_cache_evictions_total{worker, reason=ttl|manual}      counter
+llm_calls_total{provider, funding_mode, origin, status}         counter
+llm_latency_ms{provider, model}                                 histogram
+llm_tokens_total{provider, model, direction=in|out}             counter
+llm_errors_total{provider, kind}                                counter
+llm_circuit_state{provider}                                     gauge (0|1|2)
+llm_kms_latency_ms{operation=encrypt|decrypt}                   histogram
+llm_kms_induced_failures_total{operation, transient}            counter
+llm_kms_retries_total{operation, outcome=success|fail}          counter
+llm_kms_retry_success_ratio                                     gauge
+llm_retries_skipped_deadline_total{operation}                   counter
+llm_key_invalidations_total{provider, reason}                   counter
+llm_dek_cache_hits_total{worker}                                counter
+llm_dek_cache_misses_total{worker}                              counter
+llm_dek_cache_stale_hits_total{worker, reason=version_mismatch} counter
+llm_dek_cache_evictions_total{worker, reason=ttl|manual}        counter
+llm_kek_shard_distribution{kek_version, shard_id}               gauge
+llm_kek_rebalance_progress{from_version, to_version}            gauge (0-1)
 ```
+
+Notas operativas:
+
+- `llm_kms_retry_success_ratio` = `llm_kms_retries_total{outcome="success"}`
+  / `llm_kms_retries_total{*}`. Si cae bajo 0.5 sostenido 10min → alerta
+  (el retry no está ayudando; probablemente region down).
+- `llm_kek_shard_distribution` se emite una vez por minuto desde un job
+  de observabilidad (no por request). Permite detectar hot shards
+  (std-dev > 30% del promedio dispara warning Grafana).
+- `llm_retries_skipped_deadline_total` alto indica spans con deadlines
+  demasiado ajustados; señal para revisar UX timeouts.
 
 ### 10.3 Logs (pino → Loki)
 
@@ -887,16 +1039,29 @@ lo computa en lectura.
 
 ### 13.2 Failure modes documentados
 
+**Importante — scope del circuit breaker**. El circuit breaker
+descrito en §4.2 aplica **exclusivamente a proveedores LLM**
+(Anthropic, OpenAI). NO existe circuit breaker sobre KMS. Frases
+como "circuit KMS abre" que pudieran aparecer en versiones
+anteriores son lenguaje figurativo para describir el estado
+"retries agotados + entradas en cache in-process expirando →
+fail-closed sostenido sobre todas las lecturas BYOK". El manejo
+de KMS es fail-closed directo (§2 invariante 5, §4.3 "Retry
+budget KMS fijo").
+
 | Fallo                                  | Comportamiento esperado                                |
 |----------------------------------------|--------------------------------------------------------|
-| KMS throttle / 5xx transitorio         | `kms_unavailable { transient: true }`, 1 retry con jitter, luego fail-closed |
-| KMS region down prolongado             | Retries agotados → circuit KMS abre, modal P1, cache in-process sirve hits mientras dure el TTL |
+| KMS throttle / 5xx transitorio         | `kms_unavailable { transient: true }`, 1 retry con jitter (si deadline alcanza), luego fail-closed |
+| KMS region down prolongado             | Retries agotados (budget=1), cache in-process sirve hits mientras dure el TTL (≤5min); pasado el TTL, fail-closed en todas las lecturas BYOK del shard afectado. Alerta P1, modal "IA degradada" al usuario, dashboard status-page actualizado. SIN circuit breaker sobre KMS (ver nota arriba). Sin failover automático a otra región (multi-region KMS es post-MVP, §15). |
+| KMS `InvalidCiphertextException`       | `kms_unavailable { transient: false }`, no retry, audit entry `llm.kms.ciphertext_invalid` P1 (señal de corrupción o bug de migración) |
 | Postgres `user_llm_key` lectura falla  | `internal` error, sin fallback a pool                 |
 | Redis idempotency down                 | Degrada a sin-idempotency, log warn                   |
-| Provider primario circuit abierto      | Usa fallback según matriz §4.1                        |
-| Ambos proveedores abajo                | `provider_down { circuitOpen: true }` para todos      |
+| Provider LLM primario circuit abierto  | Usa fallback según matriz §4.1 (solo Influencer+ con preferMyKey o Studio con pool alt) |
+| Ambos proveedores LLM abajo            | `provider_down { circuitOpen: true }` para todos      |
 | Worker OOM en middle de call           | Request se pierde, caller reintenta con idempotency   |
 | KEK marked `PendingDeletion` in error  | Bloqueo escrituras, alerta P1, manual recovery       |
+| Rebalance batch falla mid-job          | Job es re-entrante (idempotent); rows con `kekVersion=k` y `kekVersion=k+1` coexisten en DB, cada una sirve lecturas por su versión. Job retoma desde último UPDATE exitoso. Ver §5.3 "Rebalance". |
+| Flag GrowthBook fuera de rango min/max | Worker fail-fast al arranque; rollback a valor por default hardcoded como safety net. Alerta P1. Ver §16 "Validación de flags". |
 
 ## 14 · Testing strategy
 
@@ -1005,6 +1170,13 @@ it('redacts API keys from log messages', () => {
    viven en GrowthBook (tabla abajo); requieren decisión inicial.
 6. **Política de retención de `llm_token_usage`**: ¿90 días? ¿1
    año? Depende de necesidades de analytics vs costo Postgres.
+7. **Persistencia de `providerRequestId` en idempotency cache**
+   (propuesta segundo peer review, N8): hoy el cache de idempotency
+   almacena `LLMCallOutput` incluido `providerRequestId`. Peer
+   review sugirió persistirlo por separado indexado para soporte
+   de "replay debugging" (cliente consulta por providerRequestId y
+   encuentra su request original). Decisión diferida a v1.1 por
+   no ser bloqueante de MVP.
 
 ### Feature flags expuestos en GrowthBook
 
@@ -1014,21 +1186,54 @@ requieren cambio de flag (auditable, versionado) para ajustar.
 Migración a flags cerrada en v0.2 — los valores de la tabla son
 los defaults iniciales, no decisiones abiertas:
 
-| Flag                                            | Default | Descripción |
-|-------------------------------------------------|---------|-------------|
-| `llm.circuit_breaker.error_threshold`           | `0.30`  | Error rate para abrir circuito (0–1) |
-| `llm.circuit_breaker.volume_threshold`          | `20`    | Mínimo de requests en ventana para evaluar |
-| `llm.circuit_breaker.window_seconds`            | `60`    | Ventana deslizante |
-| `llm.circuit_breaker.open_cooldown_seconds`     | `30`    | Tiempo en `open` antes de `half-open` |
-| `llm.circuit_breaker.half_open_probes`          | `3`     | Requests de prueba en `half-open` |
-| `llm.kms.retry_count`                           | `1`     | Retries ante `kms_unavailable { transient: true }` |
-| `llm.kms.retry_jitter_ms_min`                   | `50`    | Jitter mínimo |
-| `llm.kms.retry_jitter_ms_max`                   | `250`   | Jitter máximo |
-| `llm.dek_cache.ttl_seconds`                     | `300`   | TTL del cache in-process de DEK |
-| `llm.idempotency.ttl_seconds`                   | `600`   | TTL del cache de idempotency en Redis |
-| `llm.abuse.tokens_per_hour_free`                | `10000` | Umbral de detección tokens/hora Free/Creator |
-| `llm.abuse.sustained_hours`                     | `3`     | Horas sostenidas para disparar audit |
-| `llm.abuse.duplicate_prompt_hash_per_day`       | `100`   | Disparador anti-scraping |
+| Flag                                            | Default | Min  | Max   | Descripción |
+|-------------------------------------------------|---------|------|-------|-------------|
+| `llm.circuit_breaker.error_threshold`           | `0.30`  | 0.05 | 0.90  | Error rate para abrir circuito (0–1) |
+| `llm.circuit_breaker.volume_threshold`          | `20`    | 5    | 500   | Mínimo de requests en ventana para evaluar |
+| `llm.circuit_breaker.window_seconds`            | `60`    | 10   | 600   | Ventana deslizante |
+| `llm.circuit_breaker.open_cooldown_seconds`     | `30`    | 5    | 300   | Tiempo en `open` antes de `half-open` |
+| `llm.circuit_breaker.half_open_probes`          | `3`     | 1    | 20    | Requests de prueba en `half-open` |
+| `llm.kms.retry_count`                           | `1`     | 0    | **1** | Retries ante `kms_unavailable { transient: true }`. **Max hard-capped en 1** — subir más requiere PR al doc, no toggle de flag. Ver §4.3. |
+| `llm.kms.retry_jitter_ms_min`                   | `50`    | 10   | 500   | Jitter mínimo |
+| `llm.kms.retry_jitter_ms_max`                   | `250`   | 50   | 2000  | Jitter máximo (debe ser > `retry_jitter_ms_min`) |
+| `llm.dek_cache.ttl_seconds`                     | `300`   | 60   | **300** | TTL del cache in-process de DEK. **Max hard-capped en 300 (5min)** por invariante 8 del §2. |
+| `llm.idempotency.ttl_seconds`                   | `600`   | 60   | 3600  | TTL del cache de idempotency en Redis |
+| `llm.abuse.tokens_per_hour_free`                | `10000` | 1000 | 1e6   | Umbral de detección tokens/hora Free/Creator |
+| `llm.abuse.sustained_hours`                     | `3`     | 1    | 24    | Horas sostenidas para disparar audit |
+| `llm.abuse.duplicate_prompt_hash_per_day`       | `100`   | 10   | 10000 | Disparador anti-scraping |
+
+### Validación de flags (guardrails)
+
+Los flags arriba tienen dos capas de validación:
+
+1. **Fail-fast al arranque del worker**. En `llm-client` boot, se
+   lee cada flag de GrowthBook; si alguno está fuera de `[min,
+   max]` o si invariantes cruzadas fallan
+   (`retry_jitter_ms_min > retry_jitter_ms_max`,
+   `open_cooldown_seconds > window_seconds × 5`), el worker **no
+   arranca** y emite log estructurado `llm_flag_validation_failed`
+   + alerta P1 Grafana. Fallback de emergencia: defaults
+   hardcoded en `src/config/flag-defaults.ts` (los mismos valores
+   de la columna "Default"), aplicados solo si el proceso deployer
+   fuerza `LLM_CLIENT_ALLOW_FLAG_FALLBACK=true` (variable de env
+   para recovery de emergencia en un incidente donde GrowthBook
+   esté caído).
+2. **Alerta Grafana en cambios fuera de recomendado**. Un
+   dashboard `foco-llm-flags-watch` monitorea cambios de flag vía
+   GrowthBook webhook + audit entry `llm.flag_changed`
+   ({actor, flag, old, new, timestamp}). Warning si un valor nuevo
+   está en `[min, max]` pero fuera del rango recomendado
+   (ej. `error_threshold > 0.50` — técnicamente legal pero
+   operativamente sospechoso); P2 si fuera de `[min, max]` (no
+   debería ocurrir porque GrowthBook rechazaría, pero doble net).
+
+Los hard-caps marcados en negrita en la columna "Max"
+(`retry_count = 1`, `dek_cache.ttl_seconds = 300`) son
+invariantes del doc: cambiarlos requiere PR al doc + re-review,
+no un toggle de flag. La razón es que esos dos tienen
+implicaciones de seguridad/disponibilidad que deben quedar
+revisables en git history, no enterradas en historial de
+GrowthBook.
 
 ## 17 · Changelog
 
@@ -1061,8 +1266,52 @@ los defaults iniciales, no decisiones abiertas:
      GrowthBook (§16). Valores por defecto documentados como
      tabla; cambios runtime son auditables vía GrowthBook history.
 
-  Pendiente: **segundo peer review con scope solo sobre estos 6
-  cambios** (no el doc completo) antes de promover a v1.0 + firma.
+  Segundo peer review aplicado en v0.3 (siguiente entrada).
+- **v0.3** (2026-04-18) — Aplica 7 cambios del segundo peer review
+  externo (3 críticos + 3 importantes + 1 nice-to-have). Scope
+  estricto sobre diff v0.2→v0.3:
+  1. **C1 — CB scope clarificado**: el circuit breaker aplica
+     exclusivamente a proveedores LLM. NO hay CB sobre KMS; el
+     manejo es fail-closed directo con retry budget fijo. §2 inv.
+     5, §13.2 nota al inicio de tabla.
+  2. **C2 — Shard versioning + rebalance**: se introduce
+     `kekVersion` explícito al envelope (`hash(userId, kekVersion)
+     mod N(kekVersion)`). `N` es inmutable dentro de una
+     `kekVersion`; rebalance requiere nueva versión con re-wrap
+     offline en batch (procedimiento detallado). §5.1 rationale,
+     §5.1 flujo agregar/leer, §5.3 "Rebalance de sharding" nueva.
+  3. **C3 — Validación runtime de flags**: tabla min/max en §16
+     tabla de flags. Fail-fast del worker al arranque si flag
+     fuera de rango o invariante cruzada falla. Hard-caps:
+     `retry_count ≤ 1` y `dek_cache.ttl ≤ 300s`. Alerta Grafana
+     `foco-llm-flags-watch` sobre cambios. §16 nueva subsección.
+  4. **I4 — Consent modes en token accounting**: dos modos
+     `full`/`minimal`. `minimal` escribe solo `COUNT(*)` por
+     usuario/hora (abuso funciona; UI de uso degrada a "X
+     llamadas"). Campo `user_llm_key.consent_mode` auditable. §8
+     intro.
+  5. **I5 — Cache key `(userId, kekVersion)` + invalidación
+     completa**: cache key pasa de `userId` a tupla con versión;
+     stale hits por `kekVersion` mismatch se cuentan en métrica
+     nueva `llm_dek_cache_stale_hits_total`. `invalidateUserKey`
+     purga todas las versiones del userId. §2 inv. 8, §5.1 flujo
+     de lectura.
+  6. **I6 — Deadline propagation + retry budget fijo**: retry KMS
+     se suprime si el span padre tiene
+     `timeout_remaining < (max_jitter + latency_p95)`. Métrica
+     `llm_retries_skipped_deadline_total`. `retry_count` hard-cap
+     en 1 en §16. §4.3 subsección nueva.
+  7. **N7 — Métricas adicionales**: `llm_kek_shard_distribution`,
+     `llm_kek_rebalance_progress`, `llm_kms_retry_success_ratio`.
+     §10.2.
+
+  Diferido a v1.1 (N8): persistencia de `providerRequestId` en
+  idempotency cache para replay debugging — no bloqueante MVP.
+  Añadido a §16 "Aún abiertas" como #7.
+
+  Pendiente: **firma v1.0 por Jean** (opción A acordada — sin
+  tercer peer review sobre §5.3 porque los cambios son
+  aclaratorios / cierran gaps, no introducen superficie nueva).
 
 ## 18 · Relación con otros documentos
 
@@ -1086,9 +1335,11 @@ los defaults iniciales, no decisiones abiertas:
 
 ---
 
-**Estado**: DRAFT v0.2 — **pendiente de segundo peer review
-(scope: diff v0.1→v0.2) + firma de Jean**. Next: enviar los 6
-cambios del changelog v0.2 a una segunda AI de peer review (no el
-doc completo), aplicar ajustes si los hay, promover a v1.0 y
-firmar en frontmatter `status:`. Solo entonces se abre
+**Estado**: DRAFT v0.3 — **pendiente de firma v1.0 por Jean**.
+Los dos peer reviews externos fueron aplicados (6 cambios en v0.2
++ 7 cambios en v0.3). Por decisión conjunta (opción A tras el
+segundo review) no se hace un tercer peer review: los cambios de
+v0.3 cierran gaps de completitud sin introducir superficie nueva
+que lo justifique. Next: Jean firma promoviendo `status: SIGNED
+v1.0` + fecha + reviewers en frontmatter. Solo entonces se abre
 `packages/llm-client/` para implementación.
