@@ -7,6 +7,137 @@ and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Iteration 4 (plan-aware routing + circuit breaker)
+
+- `src/routing/events.ts`: types-only foundation for the routing layer.
+  `CircuitState` (`closed` | `half-open` | `open`), `CircuitOutcome`
+  (`success` | `failure` | `neutral`), `CircuitDecision` (`allow` |
+  `probe` | `deny_open` | `deny_probes_exhausted`),
+  `CircuitStateChangeEvent` (carries `errorRate` + `volume` on
+  `closed → open`, omitted on the other three), `OnCircuitStateChange`
+  callback alias. Pure helpers `gaugeValueForState` (§10.2 gauge
+  encoding: `closed=0 · half-open=1 · open=2`) and
+  `classifyOutcomeForBreaker(err)` — total function over
+  `LLMCallError['kind']`, maps `provider_down` / `network_error` /
+  `rate_limit` / `internal` → `failure`; everything else → `neutral`
+  (including `quota_exhausted` per iter 4 BYOK policy; iter 7 router
+  will override this for the Managed pool rotation signal).
+- `src/config/flag-reader.ts`: narrow `FlagsReader` contract
+  (`get<K extends LLMFlagName>(name: K): number`) separated from
+  `flag-defaults.ts` (schema) and `flag-validation.ts` (boot-time
+  validator). `createStaticFlagsReader(values)` snapshots the values
+  eagerly via `Object.freeze({...values})` so post-construction
+  mutation of the caller's object cannot retroactively change observed
+  values. Pull-on-call pattern — no second cache layer stacked on top
+  of GrowthBook's own.
+- `src/routing/circuit-breaker.ts`: `createCircuitBreaker(deps)`
+  factory. Per-provider sliding-window breaker. Volume counts only
+  failures + successes (neutrals observed but excluded from both
+  volume and rate). Tripping check is **strictly `errorRate >
+  errorThreshold`** so a rate exactly at threshold does not open the
+  circuit. Lazy cooldown resolution (`maybeOpenToHalfOpen` called at
+  the top of every public method — no `setTimeout`). Recovery
+  (`half-open → closed`) resets the window so old failures don't drag
+  the provider back open after a fresh sample or two. Neutral probes
+  release their reservation slot but do NOT count toward the success
+  quota — the breaker stays `half-open` until a real signal arrives.
+  `probesInFlight` clamped at 0 on the decrement path to tolerate
+  out-of-order `record()` calls. Emits `llm_circuit_state{provider}`
+  gauge + `llm_circuit_transitions_total{provider,from,to,reason}` +
+  `llm_circuit_decisions_total{provider,decision}` +
+  `llm_circuit_outcomes_total{provider,outcome}` (§10.2). Invokes
+  `onStateChange` synchronously on every transition; audit wiring for
+  `llm.circuit_opened` / `llm.circuit_closed` (§11) lands in iter 6
+  behind this hook. State gauge is seeded on first `stateFor()` touch
+  so Prometheus doesn't render a gap before the first transition.
+- `src/routing/plan-router.ts`: `createPlanRouter(deps)` factory
+  implementing the §4.1 decision matrix. Free / Creator route
+  **BYOK-mandatory** — provider mismatch, `status ∉ {active, pending}`
+  and resolver errors all short-circuit before any HTTP work, incrementing
+  `llm_router_resolve_failures_total{plan,reason}`. On a successful
+  BYOK call the router stamps `fundingMode: 'byok'` onto the provider
+  output; on `invalid_key` it **replaces the raw error with
+  `plan_requires_key` and fires `onByokKeyInvalidated`** so iter 5 can
+  mark the `user_llm_key` row invalid and notify the user.
+  Influencer / Celebrity with `preferMyKey=true` tries BYOK first;
+  falls back to Managed on any per-key transient —
+  `invalid_key` | `quota_exhausted` | `rate_limit` | `network_error` —
+  per **Ajuste 6 FULL** (signed 2026-04-18, review 2026-04-19).
+  `rate_limit` buckets live on the API key in all three MVP providers
+  so Managed has an independent bucket; `network_error` is per-call
+  transient and a Managed retry may land on a different
+  DNS/keepalive path. The invalidation callback fires **only** on
+  `invalid_key` — the other three triggers leave the `user_llm_key`
+  row untouched. `provider_down` is NOT a fallback trigger because
+  the §4.2 circuit breaker already short-circuits provider-wide
+  outages upstream. Resolver failure (e.g. `kms_unavailable`) is
+  surfaced because Managed uses the same KMS. Studio routes Managed;
+  alternate-pool rotation is deferred to iter 7 behind the same
+  callback seam. Circuit-breaker
+  integration: `breaker.isCallAllowed(provider)` is consulted before
+  every HTTP call — `deny_open` / `deny_probes_exhausted` short-circuit
+  to `provider_down{circuitOpen: true}` and increment
+  `llm_router_cb_denies_total`. Successful calls and errors classified
+  by `classifyOutcomeForBreaker` are recorded with
+  `breaker.record(...)`. `providerForModel(model)` exhaustively maps
+  the 7 MVP `ModelId`s; `routingMismatchUserMessage` is exported so
+  the UI (iter 7+) has a single source of truth for the mismatch copy
+  (the taxonomy's `plan_requires_key` variant carries only `{ kind,
+  plan }` — no `userMessage` field). Correlation IDs from
+  `node:crypto` `randomBytes(8).toString('hex')` (iter 6 will swap for
+  OTel span ids).
+- `src/routing/index.ts`: barrel re-exporting the CircuitBreaker +
+  PlanRouter public surface, metric-name tables (`CB_METRIC_NAMES`,
+  `ROUTER_METRIC_NAMES`), types (`CircuitState`, `CircuitOutcome`,
+  `CircuitDecision`, `CircuitStateChangeEvent`, `OnCircuitStateChange`,
+  `Plan`, `BYOKStatus`, `UserQuota`, `ResolvedKey`, `ApiKeyRequest`,
+  `ApiKeyResolver`, `ProviderRegistry`, `RouteInput`,
+  `RouterCallOutput`, `PlanRouter`, `PlanRouterDeps`), and helpers
+  (`providerForModel`, `routingMismatchUserMessage`,
+  `classifyOutcomeForBreaker`, `gaugeValueForState`).
+- Public surface: new subpath export `@chisu/llm-client/routing` —
+  and the matching entry in `publishConfig.exports`.
+- `test/routing/circuit-breaker.test.ts`: ~500 lines. Covers
+  `gaugeValueForState`, `classifyOutcomeForBreaker` (failure + neutral
+  mappings including `quota_exhausted → neutral`), closed-state
+  behaviour (initial allow, gauge seed on first touch, below-volume
+  stays closed, strict `>` threshold, neutral exclusion, pruning),
+  `open → half-open → closed` (deny while open, lazy cooldown via
+  injected clock, probe budget exhaustion, recovery after N successes
+  with window reset, `half-open → open` on first probe failure,
+  neutral probes release slot but keep state half-open), metrics
+  surface (CB_METRIC_NAMES counters + gauge), `onStateChange` sync
+  invocation + safe omission, per-provider isolation, `Date.now`
+  default, and `FlagsReader` contract (all 5 §16 CB flags exposed,
+  post-construction mutation ignored).
+- `test/routing/plan-router.test.ts`: ~600 lines with `FakeProvider` +
+  `FakeResolver` harnesses (queue-per-mode resolver; queue-per-call
+  provider). Includes **Jean's explicit ajuste-6 test case**:
+  Influencer+ `preferMyKey=true`, BYOK returns `invalid_key` → router
+  calls managed resolver + provider, stamps `providerUsed`,
+  increments `llm_router_fallbacks_total{reason=invalid_key}`, AND
+  fires `onByokKeyInvalidated` with the correct provider. Decision
+  matrix tests cover Free/Creator (no key, mismatch, `invalid`,
+  `quota_exhausted`, `pending` status accepted, resolver failure,
+  success, `invalid_key` → `plan_requires_key` + callback,
+  `provider_down` surfaced), Influencer/Celebrity (`preferMyKey=false`
+  → Managed direct; `preferMyKey=true` + success → BYOK;
+  `preferMyKey=true` + `invalid_key` → Managed fallback + callback;
+  `preferMyKey=true` + `quota_exhausted` → Managed fallback, NO
+  callback; `preferMyKey=true` + `rate_limit` → Managed fallback, NO
+  callback (Ajuste 6 FULL); `preferMyKey=true` + `network_error` →
+  Managed fallback, NO callback (Ajuste 6 FULL);
+  `preferMyKey=true` + `provider_down` → surfaced (CB covers it);
+  `preferMyKey=true` + BYOK resolver fails → surfaced;
+  mismatched BYOK provider → Managed direct; non-active BYOK status
+  → Managed direct; Managed resolver failure surfaced; celebrity
+  treated like influencer), Studio (Managed direct even with
+  `preferMyKey=true`), CB integration (open breaker short-circuits
+  with no HTTP call; real breaker tripped after 3 provider_downs
+  produces `provider_down{circuitOpen:true}`), deployment
+  misconfiguration (`internal` error with 16-hex correlationId when
+  provider is not registered), and AbortSignal plumbing.
+
 ### Added — Iteration 3 (provider adapters)
 
 - `src/types/request.ts`: `ModelId` union (7 MVP model ids across the

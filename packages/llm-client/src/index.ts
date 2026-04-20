@@ -4,12 +4,18 @@
  * Iteration 1 scope: error taxonomy + classifiers + flag config.
  * Iteration 2 scope: envelope encryption (KEK-per-shard, DEK cache
  *   TTL ≤300s, zeroisation).
- * Iteration 3 scope (this): provider adapters — Anthropic Messages,
+ * Iteration 3 scope: provider adapters — Anthropic Messages,
  *   OpenAI Chat Completions, Gemini AI Studio — behind a narrow
  *   `Provider` interface + an injectable `HttpClient` abstraction.
+ * Iteration 4 scope (this): plan-aware router + per-provider circuit
+ *   breaker. Implements LLM_CLIENT.md §4 (routing matrix + CB state
+ *   machine). BYOK required for Free/Creator; Influencer+ with
+ *   `preferMyKey` falls back Managed-ward on `invalid_key` /
+ *   `quota_exhausted`. CB transitions emit to `Metrics` +
+ *   `onStateChange`.
  *
- * The `LLMClient.call()` surface (plan-aware routing, provider
- * dispatch) lands in Iteration 7 of the implementation plan.
+ * The `LLMClient.call()` surface (orchestrator, latency, idempotency)
+ * lands in Iteration 7 of the implementation plan.
  *
  * @see ../../../docs/LLM_CLIENT.md — the signed contract this
  *      package implements (v1.1 SIGNED, 2026-04-18).
@@ -21,6 +27,7 @@ export * from './crypto/index.js';
 export * from './observability/index.js';
 export * from './providers/index.js';
 export * from './http/index.js';
+export * from './routing/index.js';
 export type {
   NormalizedContentBlock,
   NormalizedLLMRequest,

@@ -21,3 +21,5 @@ export {
   validateFlags,
   loadFlagsWithFallback,
 } from './flag-validation.js';
+
+export { type FlagsReader, createStaticFlagsReader } from './flag-reader.js';

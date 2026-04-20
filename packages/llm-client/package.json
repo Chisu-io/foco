@@ -57,6 +57,10 @@
       "types": "./src/providers/index.ts",
       "import": "./src/providers/index.ts"
     },
+    "./routing": {
+      "types": "./src/routing/index.ts",
+      "import": "./src/routing/index.ts"
+    },
     "./types": {
       "types": "./src/types/index.ts",
       "import": "./src/types/index.ts"
@@ -93,6 +97,10 @@
       "./providers": {
         "types": "./dist/providers/index.d.ts",
         "import": "./dist/providers/index.js"
+      },
+      "./routing": {
+        "types": "./dist/routing/index.d.ts",
+        "import": "./dist/routing/index.js"
       },
       "./types": {
         "types": "./dist/types/index.d.ts",

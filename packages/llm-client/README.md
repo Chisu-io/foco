@@ -6,15 +6,24 @@ anchor contract of Foco.
 
 ## Status
 
-Iteration 3 of 9 (see `project_foco_llm_client_implementation_plan`).
+Iteration 4 of 9 (see `project_foco_llm_client_implementation_plan`).
 **Not production-ready yet.** Iteration 1 shipped the error taxonomy
 and flag config layer; Iteration 2 shipped the envelope-encryption
 crypto layer (KEK-per-shard, DEK cache TTL ≤300 s, zeroisation);
-Iteration 3 (this) ships the three MVP provider adapters — Anthropic
+Iteration 3 shipped the three MVP provider adapters — Anthropic
 Messages, OpenAI Chat Completions, and Gemini AI Studio — behind a
-narrow `Provider` interface and an injectable `HttpClient` abstraction.
-The plan-aware `LLMClient.call()` surface (BYOK vs Managed routing,
-circuit breakers, token accounting) lands in Iteration 7.
+narrow `Provider` interface and an injectable `HttpClient` abstraction;
+Iteration 4 (this) ships the **plan-aware router + per-provider
+circuit breaker** that sit between `LLMClient.call()` and the three
+adapters. BYOK-mandatory routing for Free / Creator, Managed primary
+with optional BYOK fallback for Influencer+ (with `preferMyKey=true`),
+and Managed for Studio. Fallback triggers on any per-key transient:
+`invalid_key` | `quota_exhausted` | `rate_limit` | `network_error`
+(Ajuste 6 FULL, 2026-04-19). `provider_down` is NOT a fallback
+trigger — the circuit breaker already short-circuits provider-wide
+outages upstream. `onByokKeyInvalidated` fires ONLY on `invalid_key`.
+The orchestrator-level `LLMClient.call()` surface (latency
+measurement, idempotency, token accounting) lands in Iteration 7.
 
 ## Scope
 
@@ -82,13 +91,43 @@ import {
   type PingOutput,
   type StopReason,
   type UsageCounts,
+  // Routing layer (§4) — new in Iter 4
+  createCircuitBreaker,
+  createPlanRouter,
+  providerForModel,
+  routingMismatchUserMessage,
+  classifyOutcomeForBreaker,
+  gaugeValueForState,
+  createStaticFlagsReader,
+  CB_METRIC_NAMES,
+  ROUTER_METRIC_NAMES,
+  type CircuitBreaker,
+  type CircuitBreakerDeps,
+  type CircuitState,
+  type CircuitOutcome,
+  type CircuitDecision,
+  type CircuitStateChangeEvent,
+  type OnCircuitStateChange,
+  type PlanRouter,
+  type PlanRouterDeps,
+  type Plan,
+  type BYOKStatus,
+  type UserQuota,
+  type ResolvedKey,
+  type ApiKeyRequest,
+  type ApiKeyResolver,
+  type ProviderRegistry,
+  type RouteInput,
+  type RouterCallOutput,
+  type FlagsReader,
   // Shared result
   ok,
   err,
 } from '@chisu/llm-client';
 ```
 
-The `LLMClient.call()` surface lands in Iteration 7.
+The orchestrator-level `LLMClient.call()` surface (latency,
+idempotency, token accounting) lands in Iteration 7.
 
 ## Invariants this package enforces
 
@@ -120,6 +159,22 @@ current surface:
    metrics / traces / audit to the router. Their only I/O is the
    single HTTP call. `content_filter` / `SAFETY` / `RECITATION` are
    errors (`content_blocked`), not successful completions (§9.4).
+7. **Plan-aware routing never throws and never falls back silently.**
+   Free / Creator require BYOK — no Managed fallback. Influencer+
+   with `preferMyKey=true` falls back to Managed on any per-key
+   transient: `invalid_key` | `quota_exhausted` | `rate_limit` |
+   `network_error` (Ajuste 6 FULL, 2026-04-19). `provider_down` is
+   NOT a fallback trigger — the §4.2 circuit breaker already covers
+   provider-wide outages upstream, so auto-fallback there would be
+   redundant. `kms_unavailable` / resolver failures are surfaced
+   because Managed uses the same KMS. The `onByokKeyInvalidated`
+   hook fires ONLY on `invalid_key` — the other fallback triggers
+   leave the key row untouched (§4.1, §6).
+8. **No `setTimeout` in the circuit breaker.** State transitions are
+   clock-driven via an injected `now()`; cooldowns are resolved
+   lazily at the top of every `isCallAllowed()` / `record()` call.
+   This keeps the breaker deterministic in tests and avoids timer
+   drift in production.
 
 ## Development
 
