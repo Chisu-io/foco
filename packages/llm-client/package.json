@@ -124,6 +124,7 @@
   },
   "dependencies": {
     "@aws-sdk/client-kms": "^3.900.0",
+    "@chisu/schemas": "workspace:*",
     "zod": "^3.25.0"
   },
   "devDependencies": {

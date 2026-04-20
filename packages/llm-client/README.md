@@ -6,22 +6,29 @@ anchor contract of Foco.
 
 ## Status
 
-Iteration 4 of 9 (see `project_foco_llm_client_implementation_plan`).
+Iteration 5 of 9 (see `project_foco_llm_client_implementation_plan`).
 **Not production-ready yet.** Iteration 1 shipped the error taxonomy
 and flag config layer; Iteration 2 shipped the envelope-encryption
 crypto layer (KEK-per-shard, DEK cache TTL ≤300 s, zeroisation);
 Iteration 3 shipped the three MVP provider adapters — Anthropic
 Messages, OpenAI Chat Completions, and Gemini AI Studio — behind a
 narrow `Provider` interface and an injectable `HttpClient` abstraction;
-Iteration 4 (this) ships the **plan-aware router + per-provider
-circuit breaker** that sit between `LLMClient.call()` and the three
-adapters. BYOK-mandatory routing for Free / Creator, Managed primary
-with optional BYOK fallback for Influencer+ (with `preferMyKey=true`),
-and Managed for Studio. Fallback triggers on any per-key transient:
-`invalid_key` | `quota_exhausted` | `rate_limit` | `network_error`
-(Ajuste 6 FULL, 2026-04-19). `provider_down` is NOT a fallback
-trigger — the circuit breaker already short-circuits provider-wide
-outages upstream. `onByokKeyInvalidated` fires ONLY on `invalid_key`.
+Iteration 4 shipped the **plan-aware router + per-provider circuit
+breaker** that sit between `LLMClient.call()` and the three adapters
+(BYOK-mandatory for Free / Creator, Managed primary with optional
+BYOK fallback for Influencer+ with `preferMyKey=true`, Managed for
+Studio; fallback triggers `invalid_key` | `quota_exhausted` |
+`rate_limit` | `network_error` per Ajuste 6 FULL, 2026-04-19).
+Iteration 5 (this) ships the **audit sink** for CB state transitions:
+`createCircuitAuditSink(deps)` returns an `OnCircuitStateChange` that
+turns LLM_CLIENT.md §11's two auditable transitions
+(`llm.circuit_opened` on closed→open and `llm.circuit_closed` on
+half-open→closed) into `SystemAuditEntry` drafts and delegates
+persistence to an injected `AuditWriter`. The other two transitions
+(`open→half-open`, `half-open→open`) are NOT auditable per §11 — they
+increment `llm_audit_ignored_transitions_total{from,to}` instead. The
+writer owns the hash chain (id / sequence / prevHash / rowHash) per
+PRODUCTION_READINESS.md §3; `llm-client` stays DB-agnostic.
 The orchestrator-level `LLMClient.call()` surface (latency
 measurement, idempotency, token accounting) lands in Iteration 7.
 
@@ -120,11 +127,67 @@ import {
   type RouteInput,
   type RouterCallOutput,
   type FlagsReader,
+  // Audit sink (§11) — new in Iter 5
+  createCircuitAuditSink,
+  buildAuditDraft,
+  auditActionForTransition,
+  AUDIT_SINK_METRIC_NAMES,
+  type AuditEntryDraft,
+  type AuditSinkDeps,
+  type AuditSinkLogger,
+  type AuditWriter,
+  type AuditWriteError,
+  // Re-exported from @chisu/schemas for consumer convenience
+  type SystemActor,
+  type SystemActorKind,
   // Shared result
   ok,
   err,
 } from '@chisu/llm-client';
 ```
+
+## Composition — wiring the audit sink to the breaker
+
+The audit sink is a pure consumer of the `OnCircuitStateChange` hook
+exposed by `createCircuitBreaker`. The hosting app plugs its own
+`AuditWriter` implementation (pg / drizzle / supabase-js — it owns the
+`system_audit` tail lock and closes `id` / `sequence` / `prevHash` /
+`rowHash`) and hands the callback to the breaker factory:
+
+```ts
+import {
+  createCircuitBreaker,
+  createCircuitAuditSink,
+  InMemoryMetrics,
+  type AuditWriter,
+} from '@chisu/llm-client';
+
+declare const writer: AuditWriter; // built by the hosting app
+const metrics = new InMemoryMetrics();
+
+const onStateChange = createCircuitAuditSink({
+  writer,
+  metrics,
+  // Optional overrides:
+  // now: () => Date.now(),
+  // logger: (msg, ctx) => logger.warn(msg, ctx),
+  // actor: { kind: 'system' },
+});
+
+const breaker = createCircuitBreaker({
+  metrics,
+  flags,                 // FlagsReader — §16 CB flags
+  onStateChange,
+  // now: () => Date.now(),
+});
+```
+
+The sink **never throws** back into the breaker — it schedules the
+insert with `queueMicrotask` and reports failures via
+`llm_audit_write_failures_total{action, reason}`. Non-auditable
+transitions (`open→half-open`, `half-open→open`) increment
+`llm_audit_ignored_transitions_total{from, to}` and are not persisted
+per LLM_CLIENT.md §11.
 
 The orchestrator-level `LLMClient.call()` surface (latency,
 idempotency, token accounting) lands in Iteration 7.
@@ -175,6 +238,43 @@ current surface:
    lazily at the top of every `isCallAllowed()` / `record()` call.
    This keeps the breaker deterministic in tests and avoids timer
    drift in production.
+9. **Audit sink is non-blocking and non-throwing.** The callback
+   returned by `createCircuitAuditSink` honours the sync / non-throw
+   contract of `OnCircuitStateChange` (`events.ts:179–184`). It
+   schedules the insert with `queueMicrotask` and catches every
+   failure path (writer throws synchronously, writer returns
+   `err(...)`, writer rejects the promise with a non-Result value,
+   the optional `logger` throws, the `metrics.counter` call throws)
+   without rethrowing — CB audit is diagnostic, not legal. The
+   `llm.key_*` sinks that land in later iterations will `await` with
+   bounded retry from the handler that originated the mutation.
+10. **Audit draft carries no key material.** The sink only receives
+    a `CircuitStateChangeEvent` — keys are resolved one layer up in
+    `plan-router.ts` and never cross the CB boundary. A test in
+    `audit-sink.test.ts` scans every produced draft against the
+    §14.3 linter regex (`sk-ant-…` / `sk-…` / `AIza…`) and fails if
+    any pattern slips through.
+11. **Hash chain stays with the writer; draft shape is
+    compile-time-coupled to the signed schema.**
+    `AuditEntryDraft` is declared as `Omit<SystemAuditEntry, 'id' |
+    'sequence' | 'prevHash' | 'rowHash'>` where `SystemAuditEntry`
+    is imported (type-only) from `@chisu/schemas`. Those four
+    fields are closed inside the DB transaction that holds the
+    `system_audit` tail lock per PRODUCTION_READINESS.md §3 —
+    serialising `prevHash` from inside the breaker would race with
+    the other six §11 emitters. Binding the draft type to the
+    signed schema turns any upstream addition of a kind or field
+    into a compile-time error here rather than a runtime
+    validation failure at the hosting boundary.
+12. **Only §11 transitions are persisted.** `llm.circuit_opened`
+    (closed → open) and `llm.circuit_closed` (half-open → closed)
+    are the two auditable CB actions per LLM_CLIENT.md §11. The
+    other two transitions (`open → half-open`, `half-open → open`)
+    are **not** auditable — they increment
+    `llm_audit_ignored_transitions_total{from, to}` as a sanity
+    signal against `llm_circuit_transitions_total`. Widening §11
+    requires a signed adjustment to the contract, not an
+    implementation decision.
 
 ## Development
 

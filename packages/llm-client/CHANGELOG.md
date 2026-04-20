@@ -7,6 +7,113 @@ and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Iteration 5 (audit sink for CB state transitions)
+
+- `src/routing/audit-sink.ts`: `createCircuitAuditSink(deps)` factory.
+  Returns an `OnCircuitStateChange` callback — pluggable into
+  `createCircuitBreaker({ onStateChange })` — that maps CB transitions
+  to `SystemAuditEntry` **drafts** (`LLM_CLIENT.md §11`) and delegates
+  persistence to an injected `AuditWriter`. The other two transitions
+  (`open→half-open`, `half-open→open`) are NOT auditable per §11 — they
+  increment `llm_audit_ignored_transitions_total{from,to}` instead. The
+  writer owns the hash chain (`id` / `sequence` / `prevHash` /
+  `rowHash`) per `PRODUCTION_READINESS.md §3`; `llm-client` stays
+  DB-agnostic (no `pg` / `drizzle` / `supabase-js` dep — the writer
+  adapter is the integration point). `AuditEntryDraft` is declared as
+  `Omit<SystemAuditEntry, 'id' | 'sequence' | 'prevHash' | 'rowHash'>`
+  with `SystemAuditEntry` / `SystemActor` / `SystemActorKind` imported
+  **type-only** from `@chisu/schemas` — the draft shape is compile-
+  time-coupled to the signed schema, so any upstream addition of a
+  kind or field becomes a compile-time error inside this package
+  rather than a runtime validation failure at the hosting boundary.
+  Fire-and-forget via
+  `queueMicrotask`; failure paths catch synchronous writer throws,
+  `Promise<err(...)>` returns, non-Result promise rejections, throwing
+  loggers, and throwing metric sinks — all land on
+  `llm_audit_write_failures_total{action, reason}` without
+  rethrowing. CB audit is diagnostic, not legal (the `llm.key_*` sinks
+  in later iterations will `await` with bounded retry from the
+  handler that originated the mutation). Actor defaults to
+  `{ kind: 'system' }` — CB transitions are not user-triggered.
+  `event.at` is the authoritative transition timestamp; `deps.now()`
+  (or `Date.now`) is only used as a fallback when `at` is absent.
+- `src/routing/audit-sink.ts` exports the pure helpers
+  `auditActionForTransition(from, to)` (maps the 2 auditable pairs to
+  `'llm.circuit_opened'` / `'llm.circuit_closed'`, `undefined` for the
+  2 non-auditable ones) and `buildAuditDraft(event, action, deps)`
+  (extracted so tests can exercise the mapping independently from the
+  async write path). Both are covered end-to-end + through the sink.
+- `src/routing/index.ts`: barrel extended with the new public surface
+  (`createCircuitAuditSink`, `buildAuditDraft`,
+  `auditActionForTransition`, `AUDIT_SINK_METRIC_NAMES`, the types
+  `AuditEntryDraft` / `AuditSinkDeps` / `AuditSinkLogger` /
+  `AuditWriter` / `AuditWriteError`, and the `SystemActor` /
+  `SystemActorKind` re-exports from `@chisu/schemas` for consumer
+  convenience). No new subpath export — everything ships from the
+  existing `@chisu/llm-client/routing` entry point.
+- `package.json`: new workspace dependency `@chisu/schemas:
+  workspace:*` in `dependencies` (not `peerDependencies`). Rationale:
+  the package already has a hard runtime dep on `zod` for the same
+  purpose (normalised request validation), so the coupling to the
+  signed schema workspace is already established on the runtime
+  axis — declaring `@chisu/schemas` as a regular dep is consistent
+  with that and makes the compile-time coupling explicit. The
+  `import` is type-only so there is zero runtime/bundle impact; a
+  later move to `peerDependencies` is reversible if/when
+  `@chisu/llm-client` is published independently.
+- `test/routing/audit-sink.test.ts`: ~810 lines with a fake
+  `AuditWriter` harness (`makeFakeWriter()` with a behaviour queue;
+  `throwingSyncWriter(err)` for the synchronous-throw branch),
+  `flushMicrotasks()` that drains 4 ticks so the `queueMicrotask` →
+  `.then` / `.catch` chain settles, and pinned-clock deps (`FIXED_NOW`
+  → `'2023-11-14T22:13:20.000Z'`). 9 describe blocks:
+  `auditActionForTransition` (5 tests: opened, closed, 2 ignored,
+  identity); `buildAuditDraft` (6 tests: opened full body, closed
+  minimal body, omit-undefined discipline, actor override, `deps.now`
+  fallback when `event.at` is absent, `Date.now` default);
+  happy-path roundtrip (opened, closed, sync void return);
+  non-auditable transitions (`open→half-open`, `half-open→open`,
+  `llm_audit_ignored_transitions_total` not dedup'd across calls);
+  zero-key invariant (§14.3 regex scan over each produced draft,
+  parameterised across 3 providers + a closed-union lock on
+  `CircuitStateChangeEvent['reason']`); writer failures (all 4
+  `AuditWriteError` kinds looped + async non-Result rejection +
+  synchronous throw + non-Error rejection + throwing logger +
+  throwing metrics, all land on the counter with reason
+  `'internal'` where applicable); actor default + service override;
+  per-event isolation + concurrency (3 interleaved events, failure
+  count not multiplied, audited / ignored interleaving); deps shape
+  (works with logger omitted).
+- `test/routing/events.test.ts`: ~80 lines, 4 test cases covering the
+  defensive default branches of `gaugeValueForState` and
+  `classifyOutcomeForBreaker` (lines 53, 125, 212–220 of
+  `events.ts`). Bypasses TypeScript with `as unknown as CircuitState`
+  / `as unknown as LLMCallError` to reach the
+  `assertNeverState` / `assertNeverKind` bottoms — these branches are
+  unreachable from correctly-typed call sites but exist to catch
+  drift if a future variant lands without updating the switch. The
+  happy-path assertions for both helpers remain in
+  `circuit-breaker.test.ts`; this file is strictly about the
+  defensive branches, kept in its own commit (`test(llm-client): cover
+  events.ts exhaustiveness helpers`) so the intent is legible in diff.
+  Closes the iter 4 coverage gap flagged during verification
+  (75.6 stmts / 50 funcs on `events.ts`).
+- Invariants (README §9–12): audit sink is non-blocking and
+  non-throwing; audit draft carries no key material; hash chain stays
+  with the writer; only §11 transitions are persisted.
+
+### Deferred from Iteration 5
+
+- **No `system_audit` migration in this iteration.** `packages/db/`
+  doesn't exist yet in the monorepo; the migration + schema SQL
+  belongs to the hosting app iteration (iter 7+) where the DB
+  dependency lives. The writer adapter is the integration point.
+- **No `correlationId` added to `CircuitStateChangeEvent`.** CB
+  transitions are window-threshold-crossing (global per provider),
+  not per-request — propagating an individual request's correlation
+  id into the transition would misattribute the signal. Adding it
+  would require a signed §4.2 adjustment to the contract.
+
 ### Added — Iteration 4 (plan-aware routing + circuit breaker)
 
 - `src/routing/events.ts`: types-only foundation for the routing layer.
