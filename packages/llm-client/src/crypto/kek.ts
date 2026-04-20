@@ -29,7 +29,9 @@
 
 import {
   DecryptCommand,
+  type DecryptCommandOutput,
   EncryptCommand,
+  type EncryptCommandOutput,
   type KMSClient,
 } from '@aws-sdk/client-kms';
 
@@ -123,7 +125,10 @@ export async function kmsEncrypt(
       KeyId: input.alias,
       Plaintext: input.plaintext,
     });
-    const out = await deps.kms.send(cmd);
+    // `KMSClient.send` returns the open `ServiceOutputTypes` union —
+    // narrow to the concrete command output here. The shape is
+    // guaranteed by the SDK contract for `EncryptCommand`.
+    const out = (await deps.kms.send(cmd)) as EncryptCommandOutput;
     const blob = out.CiphertextBlob;
     if (!blob || blob.length === 0) {
       // Shouldn't happen per SDK contract, but treat as internal-
@@ -153,7 +158,9 @@ export async function kmsDecrypt(
       KeyId: input.alias,
       CiphertextBlob: input.ciphertext,
     });
-    const out = await deps.kms.send(cmd);
+    // Narrow `ServiceOutputTypes` → `DecryptCommandOutput` (see
+    // equivalent note in `kmsEncrypt`).
+    const out = (await deps.kms.send(cmd)) as DecryptCommandOutput;
     const blob = out.Plaintext;
     if (!blob || blob.length === 0) {
       const syntheticError = Object.assign(

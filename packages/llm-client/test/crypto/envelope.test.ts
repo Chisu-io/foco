@@ -220,7 +220,12 @@ describe('EnvelopeCrypto.unwrap', () => {
     await env.unwrap({ userId, envelope });
     await env.unwrap({ userId, envelope });
 
-    expect(kmsMock.commandCalls(DecryptCommand).length).toBe(1);
+    // `as never` cast: aws-sdk-client-mock@4.1 types `commandCalls`
+    // for an older SDK constructor signature (`new(input: TInput |
+    // undefined)`) — @aws-sdk/client-kms@3.900 tightened the input to
+    // non-undefined. The runtime contract is unchanged; this is a
+    // type-level narrowing only.
+    expect(kmsMock.commandCalls(DecryptCommand as never).length).toBe(1);
     expect(metrics.readCounter('llm_dek_cache_misses_total')).toBe(1);
     expect(metrics.readCounter('llm_dek_cache_hits_total')).toBe(2);
   });
@@ -249,7 +254,7 @@ describe('EnvelopeCrypto.unwrap', () => {
     const res = await env.unwrap({ userId, envelope });
     expect(res.ok).toBe(true);
 
-    expect(kmsMock.commandCalls(DecryptCommand).length).toBe(2);
+    expect(kmsMock.commandCalls(DecryptCommand as never).length).toBe(2);
     expect(
       metrics.readCounter('llm_dek_cache_evictions_total', { reason: 'ttl' }),
     ).toBe(1);

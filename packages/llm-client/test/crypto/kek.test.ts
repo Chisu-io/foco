@@ -242,8 +242,10 @@ describe('kmsEncrypt', () => {
         operation: 'decrypt',
       }),
     ).toBe(1);
-    // Only the first attempt was issued.
-    expect(kmsMock.commandCalls(DecryptCommand).length).toBe(1);
+    // Only the first attempt was issued. `as never` cast: see note in
+    // envelope.test.ts — aws-sdk-client-mock@4.1 vs
+    // @aws-sdk/client-kms@3.900 constructor signature drift.
+    expect(kmsMock.commandCalls(DecryptCommand as never).length).toBe(1);
   });
 
   it('classifies an unrecognised SDK name using HTTP status', async () => {
