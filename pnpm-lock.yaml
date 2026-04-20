@@ -99,6 +99,9 @@ importers:
       '@aws-sdk/client-kms':
         specifier: ^3.900.0
         version: 3.1032.0
+      '@chisu/schemas':
+        specifier: workspace:*
+        version: link:../schemas
       zod:
         specifier: ^3.25.0
         version: 3.25.76

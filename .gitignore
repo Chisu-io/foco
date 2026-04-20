@@ -76,3 +76,4 @@ tsconfig.sandbox.json
 
 # Scratch commit-message staging (Jean passes these to `git commit -F`)
 .cmsgs/
+_tmp_* 
