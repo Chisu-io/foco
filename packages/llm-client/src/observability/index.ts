@@ -5,3 +5,18 @@ export {
   NOOP_METRICS,
   InMemoryMetrics,
 } from './metrics.js';
+
+export {
+  type SpanAttrs,
+  type WithSpanOptions,
+  type Span,
+  type Tracer,
+  SpanKind,
+  SpanStatusCode,
+  setTracer,
+  resetTracer,
+  getTracer,
+  withSpan,
+  hashUserId,
+  hashIdempotencyKey,
+} from './tracing.js';

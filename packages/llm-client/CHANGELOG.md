@@ -7,6 +7,76 @@ and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Iteration 6 commit 1 (OTel tracer DI seam + `withSpan` helper)
+
+- `src/observability/tracing.ts`: tracer DI seam (`setTracer(t)` /
+  `resetTracer()` / `getTracer()`) plus `withSpan(name, attrs, fn,
+  options?)` async helper that drives the
+  start → run → setStatus → recordException → end lifecycle of every
+  span this package emits. The seam exists so tests can install a
+  `BasicTracerProvider` bound to an `InMemorySpanExporter` for
+  hermetic span assertions; production resolves the tracer through
+  `@opentelemetry/api`'s global registration (no-op when no SDK is
+  registered, zero cost at call sites). `withSpan` re-throws after
+  recording — callers see the original error, observability stays
+  out-of-band.
+- `src/observability/tracing.ts`: `hashUserId(userId)` and
+  `hashIdempotencyKey(key)` helpers — `sha256(utf8)` hex digests, no
+  salt. Used in iter 6 commits 3 and 4 to populate the `user.id_hash`
+  and `trace.idempotency_key_hash` span attributes of `llm.client.call`
+  per `LLM_CLIENT.md §10.1` and §7(E) of the iter 6 mini-spec
+  (`foco/.cmsgs/iter6-otel-correlation-design.md`). Hash-only because
+  the digest is a correlation key, not a long-term storage primitive.
+- `src/observability/tracing.ts`: re-exports `SpanKind`,
+  `SpanStatusCode` (values) and `Span`, `Tracer` (types) from
+  `@opentelemetry/api` so consumers do not need to add `@opentelemetry/api`
+  as a direct dep just to type a `withSpan` callback.
+- `src/observability/index.ts`: barrel extended with the tracing
+  surface (`withSpan`, `setTracer`, `resetTracer`, `getTracer`,
+  `hashUserId`, `hashIdempotencyKey`, `SpanKind`, `SpanStatusCode`,
+  types `Span` / `Tracer` / `SpanAttrs` / `WithSpanOptions`).
+  Re-exported through `src/index.ts` as part of the existing
+  `observability` star-export — no consumer-side imports change.
+- `test/observability/tracing.test.ts`: 14 specs covering happy path,
+  attribute pass-through (initial + late `setAttribute`), `SpanKind`
+  honored, error path (`SpanStatusCode.ERROR` + `recordException` +
+  rethrow + `span.end()`), non-`Error` throw wrapped into `Error` for
+  `recordException`, attribute-bag cloned (mutating the original
+  post-emit does not retroactively change recorded attrs), DI seam
+  round-trip (`setTracer` / `resetTracer` / `getTracer` identity),
+  no-op fallback path completes without error, `hashUserId`
+  determinism + 64-char hex + canonical sha256 known-value + utf-8
+  handling, `hashIdempotencyKey` aliasing semantics. Tests build
+  spans through a real `BasicTracerProvider` with `spanProcessors`
+  passed in the constructor (OTel JS ≥1.26 contract — the legacy
+  `addSpanProcessor` API is deprecated) feeding an
+  `InMemorySpanExporter`; provider is shut down in `afterEach` to
+  avoid cross-spec leakage.
+- `package.json`: `@opentelemetry/api` added to `dependencies` at
+  `^1.9.0` per §7(C) of the iter 6 mini-spec; the API package is
+  no-op without an SDK, so the runtime cost is exactly the
+  `try/finally` of `withSpan`. `@opentelemetry/sdk-trace-base` added
+  to `devDependencies` at `^1.29.0` so tests can wire a hermetic
+  exporter without dragging the SDK into the runtime bundle.
+- `README.md`: new "Observability — tracing" section documents the
+  five invariants (single point of span creation; no global side
+  effect; tests inject tracer; hash plain-sha256; scalar-only
+  attributes), the typical call shape, and the iter 8 facade
+  policy for `correlationId` (fail-closed in prod, auto-gen in dev).
+  Listed in the "Public surface" example so consumers see the new
+  exports alongside `NOOP_METRICS` / `InMemoryMetrics`.
+
+This commit only ships infrastructure — no span is actually emitted
+by any production call site yet. Spans land in iter 6 commits 3
+(`llm.client.call` root + `llm.provider.request` HTTP sub-span) and
+4 (`llm.kms.decrypt_dek` BYOK sub-span); commit 2 threads the
+required `correlationId: string` through router + providers; commit 5
+wires deadline propagation onto the existing KMS retry loop in
+`kek.ts::kmsCallOnce` per §6 of the mini-spec (the breaker keeps its
+current `isCallAllowed` / `record` / `currentState` API — no `execute`
+method is added in iter 6 because that would widen `LLM_CLIENT.md`
+without a signed adjustment, per P3 of the §8.1 divergence resolution).
+
 ### Added — Iteration 5 (audit sink for CB state transitions)
 
 - `src/routing/audit-sink.ts`: `createCircuitAuditSink(deps)` factory.
