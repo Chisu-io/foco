@@ -248,6 +248,110 @@ describe('kmsEncrypt', () => {
     expect(kmsMock.commandCalls(DecryptCommand as never).length).toBe(1);
   });
 
+  it('deadline-aware (encrypt): skips retry when projected completion exceeds deadline', async () => {
+    // Symmetrical to the decrypt test above — closes the label matrix
+    // for `llm_retries_skipped_deadline_total{operation}`. The retry
+    // loop in `kek.ts::attempt<T>()` is shared by encrypt and decrypt,
+    // so this test guards against a regression that would accidentally
+    // gate the deadline check on one operation only.
+    const err = Object.assign(new Error('throttled'), {
+      name: 'ThrottlingException',
+    });
+    kmsMock.on(EncryptCommand).rejects(err);
+
+    const { deps, metrics, clock } = makeDeps();
+    const realSend = deps.kms.send.bind(deps.kms);
+    vi.spyOn(deps.kms, 'send').mockImplementation(
+      async (...args: Parameters<typeof realSend>) => {
+        clock.t += 40;
+        return realSend(...args);
+      },
+    );
+
+    const res = await kmsEncrypt(
+      deps,
+      { alias: 'alias/foco/kek/v1/shard-0', plaintext: new Uint8Array([1]) },
+      { deadlineMs: 1060 },
+    );
+
+    expect(res.ok).toBe(false);
+    expect(
+      metrics.readCounter('llm_retries_skipped_deadline_total', {
+        operation: 'encrypt',
+      }),
+    ).toBe(1);
+    // No retry issued — only the first attempt.
+    expect(kmsMock.commandCalls(EncryptCommand).length).toBe(1);
+  });
+
+  it('deadline-aware: retry proceeds when projected completion is within deadline', async () => {
+    // Happy-path complement to the skip tests. Documents §4.3: when
+    // `deadlineMs` leaves ample headroom for jitter + projected retry
+    // latency, the retry fires and `llm_retries_skipped_deadline_total`
+    // stays 0. The second attempt succeeds, so the call returns `ok`.
+    const err = Object.assign(new Error('throttled'), {
+      name: 'ThrottlingException',
+    });
+    kmsMock
+      .on(DecryptCommand)
+      .rejectsOnce(err)
+      .resolves({ Plaintext: new Uint8Array([42]) });
+
+    const { deps, metrics, clock, sleeps } = makeDeps();
+    const realSend = deps.kms.send.bind(deps.kms);
+    vi.spyOn(deps.kms, 'send').mockImplementation(
+      async (...args: Parameters<typeof realSend>) => {
+        clock.t += 10;
+        return realSend(...args);
+      },
+    );
+
+    // Ample headroom: 10s past start (t=1000).
+    const res = await kmsDecrypt(
+      deps,
+      { alias: 'alias/foco/kek/v1/shard-0', ciphertext: new Uint8Array([1]) },
+      { deadlineMs: 11_000 },
+    );
+
+    expect(res.ok).toBe(true);
+    expect(sleeps.length).toBe(1);
+    expect(
+      metrics.readCounter('llm_retries_skipped_deadline_total', {
+        operation: 'decrypt',
+      }),
+    ).toBe(0);
+  });
+
+  it('deadline undefined: retry path unaffected (§8 decisión #5)', async () => {
+    // When `deadlineMs` is omitted, the router imposes no deadline and
+    // retries run free up to `KMS_MAX_ATTEMPTS`. This is the explicit
+    // contract in `.cmsgs/iter6-otel-correlation-design.md` §8 decisión
+    // #5 — asserting it here guards against a future well-meaning
+    // default that would silently cap retry budgets.
+    const err = Object.assign(new Error('throttled'), {
+      name: 'ThrottlingException',
+    });
+    kmsMock
+      .on(DecryptCommand)
+      .rejectsOnce(err)
+      .resolves({ Plaintext: new Uint8Array([7]) });
+
+    const { deps, metrics, sleeps } = makeDeps();
+    const res = await kmsDecrypt(deps, {
+      alias: 'alias/foco/kek/v1/shard-0',
+      ciphertext: new Uint8Array([1]),
+    });
+
+    expect(res.ok).toBe(true);
+    // Retry did fire (sleep issued, second attempt succeeded).
+    expect(sleeps.length).toBe(1);
+    expect(
+      metrics.readCounter('llm_retries_skipped_deadline_total', {
+        operation: 'decrypt',
+      }),
+    ).toBe(0);
+  });
+
   it('classifies an unrecognised SDK name using HTTP status', async () => {
     const err = Object.assign(new Error('unknown'), {
       name: 'SomethingElse',

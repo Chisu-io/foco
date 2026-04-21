@@ -633,3 +633,148 @@ describe('EnvelopeCrypto.unwrap — OTel `llm.kms.decrypt_dek` span (iter 6 comm
     expect(span.attributes['llm.provider']).toBe('gemini');
   });
 });
+
+/**
+ * §4.3 — deadline propagation end-to-end (iter 6 commit 5).
+ *
+ * `kek.ts::attempt<T>()` already enforces the deadline skip-retry
+ * logic; `envelope.ts` already plumbs `input.deadlineMs` into
+ * `kmsOpts.deadlineMs` for both wrap and unwrap. These tests close
+ * the contract end-to-end by exercising the observable boundary —
+ * the `llm_retries_skipped_deadline_total` counter — through the
+ * envelope layer. If propagation ever regresses (e.g. someone drops
+ * the `deadlineMs` field from the `kmsOpts` literal) the skip-deadline
+ * path stops firing and these tests fail.
+ *
+ * Per `.cmsgs/iter6-otel-correlation-design.md` §8 decisión #5, when
+ * `deadlineMs` is undefined the router imposes no deadline and retries
+ * run free; the last test here asserts that contract at the envelope
+ * surface as well.
+ *
+ * Determinismo del harness: `makeEnvCrypto` fija `jitterMs = 150`
+ * (midpoint de 50-250) y `clock.t` no avanza durante `kms.send` (el
+ * mock resuelve sync). Entonces `observedLatencyMs = 0` y la
+ * proyección del retry colapsa a `clock.t + 150`. Cualquier
+ * `deadlineMs < clock.t + 150` dispara el skip path deterministicamente.
+ */
+describe('EnvelopeCrypto — deadline propagation (iter 6 commit 5, §4.3)', () => {
+  const CLOCK_START = 10_000;
+  const JITTER_MID = 150;
+  const DEADLINE_TIGHT = CLOCK_START + JITTER_MID - 1; // 10_149 — skip fires
+  const DEADLINE_AMPLE = CLOCK_START + JITTER_MID + 100; // 10_250 — retry proceeds
+
+  it('WrapInput.deadlineMs reaches kmsOpts → skip-retry fires on encrypt path', async () => {
+    const err = Object.assign(new Error('throttled'), {
+      name: 'ThrottlingException',
+    });
+    kmsMock.on(EncryptCommand).rejects(err);
+
+    const { env, metrics } = makeEnvCrypto();
+    const res = await env.wrap({
+      userId: 'u-dl-wrap',
+      keyPlaintext: Buffer.from('sk-ant-key'),
+      deadlineMs: DEADLINE_TIGHT,
+    });
+    expect(res.ok).toBe(false);
+
+    expect(
+      metrics.readCounter('llm_retries_skipped_deadline_total', {
+        operation: 'encrypt',
+      }),
+    ).toBe(1);
+    // Only the initial attempt was issued — the retry was cut off.
+    expect(kmsMock.commandCalls(EncryptCommand).length).toBe(1);
+  });
+
+  it('UnwrapInput.deadlineMs reaches kmsOpts → skip-retry fires on decrypt path', async () => {
+    const userId = 'u-dl-unwrap';
+    const { envelope } = await buildEnvelope({
+      userId,
+      keyPlaintext: Buffer.from('sk-ant-key'),
+      kekVersion: 1,
+    });
+    const err = Object.assign(new Error('throttled'), {
+      name: 'ThrottlingException',
+    });
+    kmsMock.on(DecryptCommand).rejects(err);
+
+    const { env, metrics } = makeEnvCrypto();
+    const res = await env.unwrap({
+      userId,
+      envelope,
+      provider: 'anthropic',
+      deadlineMs: DEADLINE_TIGHT,
+    });
+    expect(res.ok).toBe(false);
+
+    expect(
+      metrics.readCounter('llm_retries_skipped_deadline_total', {
+        operation: 'decrypt',
+      }),
+    ).toBe(1);
+    expect(kmsMock.commandCalls(DecryptCommand as never).length).toBe(1);
+  });
+
+  it('UnwrapInput.deadlineMs with ample headroom: retry proceeds and call succeeds', async () => {
+    const userId = 'u-dl-ample';
+    const { envelope, dek } = await buildEnvelope({
+      userId,
+      keyPlaintext: Buffer.from('sk-ant-key'),
+      kekVersion: 1,
+    });
+    const transientErr = Object.assign(new Error('throttled'), {
+      name: 'ThrottlingException',
+    });
+    kmsMock
+      .on(DecryptCommand)
+      .rejectsOnce(transientErr)
+      .resolves({ Plaintext: new Uint8Array(dek) });
+
+    const { env, metrics } = makeEnvCrypto();
+    const res = await env.unwrap({
+      userId,
+      envelope,
+      provider: 'anthropic',
+      deadlineMs: DEADLINE_AMPLE,
+    });
+    expect(res.ok).toBe(true);
+
+    // Deadline was honored but not violated → no skip metric.
+    expect(
+      metrics.readCounter('llm_retries_skipped_deadline_total', {
+        operation: 'decrypt',
+      }),
+    ).toBe(0);
+    // Two attempts issued: initial (transient fail) + retry (success).
+    expect(kmsMock.commandCalls(DecryptCommand as never).length).toBe(2);
+  });
+
+  it('deadlineMs undefined end-to-end: retry fires (§8 decisión #5)', async () => {
+    const userId = 'u-dl-none';
+    const { envelope, dek } = await buildEnvelope({
+      userId,
+      keyPlaintext: Buffer.from('sk-ant-key'),
+      kekVersion: 1,
+    });
+    const transientErr = Object.assign(new Error('throttled'), {
+      name: 'ThrottlingException',
+    });
+    kmsMock
+      .on(DecryptCommand)
+      .rejectsOnce(transientErr)
+      .resolves({ Plaintext: new Uint8Array(dek) });
+
+    const { env, metrics } = makeEnvCrypto();
+    // No `deadlineMs` on `UnwrapInput` → §8 decisión #5: the router
+    // imposes no deadline and retries run free up to KMS_MAX_ATTEMPTS.
+    const res = await env.unwrap({ userId, envelope, provider: 'anthropic' });
+    expect(res.ok).toBe(true);
+    expect(
+      metrics.readCounter('llm_retries_skipped_deadline_total', {
+        operation: 'decrypt',
+      }),
+    ).toBe(0);
+    expect(kmsMock.commandCalls(DecryptCommand as never).length).toBe(2);
+  });
+});
+
