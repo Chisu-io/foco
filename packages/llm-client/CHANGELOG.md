@@ -7,6 +7,102 @@ and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Iteration 6 commit 3 (`llm.client.call` root span + `llm.provider.request` sub-span, §10.1)
+
+- `src/routing/plan-router.ts`: emits the two spans defined by
+  `LLM_CLIENT.md v1.1` §10.1, using the OTel tracer DI seam shipped in
+  iter 6 commit 1 (`getTracer()`).
+  - **`llm.client.call`** root span (`SpanKind.CLIENT`) wraps every
+    invocation of `route()`. Open attrs: `llm.origin`, `user.id_hash`
+    (sha256 hex of `userId` — the raw id never reaches the span).
+    Close-success attrs (seven, per the signed mini-spec): `llm.provider`,
+    `llm.model`, `llm.input_tokens`, `llm.output_tokens`,
+    `llm.funding_mode` (DERIVED from the routing result per R1 — the
+    router never receives a `fundingMode` on input), `llm.circuit_state`,
+    `llm.latency_ms`. Close-error: only `llm.circuit_state` + status
+    `ERROR` with `message = error.kind`. Status `OK` on success.
+  - **`llm.provider.request`** sub-span (`SpanKind.CLIENT`) wraps each
+    `provider.call(...)` inside `doProviderCall()`. Open attrs:
+    `llm.provider`, `llm.model`. Close-success adds `llm.input_tokens`
+    + `llm.output_tokens` and status `OK`. Close-error sets status
+    `ERROR` with `message = error.kind` (no token counts on failure).
+    Breaker-deny short-circuit opens **no** sub-span — the outbound
+    HTTP never happens, so there is nothing to observe at the provider
+    layer; the root span reflects the denial via `llm.circuit_state`
+    at close-error.
+  - Active-context propagation: the routing body runs inside
+    `context.with(trace.setSpan(context.active(), rootSpan), ...)` so
+    the sub-span picks up the root span as parent in production (where
+    `@chisu/observability` installs an `AsyncHooksContextManager`). In
+    tests without that manager, the sub-span is emitted as an
+    independent root — the hermetic specs assert per-span content,
+    not hierarchy.
+  - `route()` deliberately bypasses the iter 6 commit 1 `withSpan`
+    helper. Two reasons (R3 of the signed mini-spec): (1) `route()`
+    never throws — it returns `Result<_, LLMCallError>` per §3.5 —
+    and `withSpan` would auto-stamp `SpanStatusCode.OK` on return,
+    overwriting the manual `ERROR` we set on the `Result.err` branch;
+    (2) `LLMCallError` is a tagged union, not an `Error`, so
+    `recordException(...)` would lie about the stack. The taxonomy is
+    the audit trail per §14.3 — we never `recordException` a
+    `Result.err`. The same justification applies to `doProviderCall`'s
+    sub-span path, which also uses `tracer.startSpan(...)` directly.
+  - Helper `stampRootSpanClose(rootSpan, result, requiredProvider,
+    latencyMs)` extracted to keep `route()` readable. Knows the success
+    vs error attribute contracts and stamps the manual status.
+  - **R2 carve-out**: `trace.idempotency_key_hash` is **deliberately
+    omitted** in commit 3. `RouteInput` does not carry an idempotency
+    key in the iter 6 surface; the iter 7 client facade owns it and
+    will stamp the attribute when it threads its own `idempotencyKey`
+    through to the router. A canary test in
+    `test/routing/plan-router.test.ts` enforces the omission across
+    every emitted span.
+  - Latency measured with `performance.now()` to avoid wall-clock
+    drift; rounded to integer milliseconds before stamping.
+- `test/routing/plan-router.test.ts`: new describe block
+  `PlanRouter — OTel spans (iter 6 commit 3, §10.1)` with hermetic
+  setup (`BasicTracerProvider` + `SimpleSpanProcessor` +
+  `InMemorySpanExporter`, injected via `setTracer`; reset via
+  `resetTracer` + `exporter.reset()` + `provider.shutdown()` in
+  `afterEach`). Ten new specs:
+  1. Happy BYOK (Free) — root has all seven close attrs + `OK`;
+     sub-span has token counts + `OK`; both kind `CLIENT`.
+  2. Happy Managed (Influencer, default `preferMyKey=false`) — root
+     stamps `llm.funding_mode='managed'` (R1 — derived from routing
+     result, not from input).
+  3. BYOK → Managed fallback on `invalid_key` — two sub-spans (BYOK
+     `ERROR(invalid_key)`, Managed `OK`); root `OK` with
+     `llm.funding_mode='managed'`.
+  4. Breaker deny — root `ERROR(provider_down)`, `llm.circuit_state='open'`,
+     no sub-span emitted, no `events` (R3 canary — taxonomy is the
+     audit trail).
+  5. Provider error (`rate_limit` on Free BYOK) — root + sub-span
+     both `ERROR(rate_limit)`; sub-span has no token counts; neither
+     span has any `events`.
+  6. `plan_requires_key` (Free with no key) — root `ERROR`, no
+     sub-span (resolver never reached).
+  7. Unregistered provider (misconfigured registry) — root
+     `ERROR(internal)`, no sub-span.
+  8. **R2 canary** — `trace.idempotency_key_hash` is **never** present
+     on any emitted span across three representative paths.
+  9. **Zero-leak §14.3** — no raw key material (`sk-…`), `Bearer`
+     token, `Authorization` header, or raw `userId` appears in any
+     span attribute value.
+  10. **No-op tracer fallback** — `resetTracer()` then `route()` still
+      succeeds; exporter sees zero spans (DI seam contract from iter 6
+      commit 1).
+- Imports added at the top of `test/routing/plan-router.test.ts`:
+  `afterEach` from vitest, `SpanKind` + `SpanStatusCode` from
+  `@opentelemetry/api`, `BasicTracerProvider` +
+  `InMemorySpanExporter` + `SimpleSpanProcessor` from
+  `@opentelemetry/sdk-trace-base`, `hashUserId` + `resetTracer` +
+  `setTracer` from `src/observability/tracing.ts`.
+- No public surface change. `src/routing/index.ts` barrel is
+  untouched — every span emission stays in `plan-router.ts`. No new
+  runtime dependency: `@opentelemetry/api` is already a `dependency`
+  (added in commit 1) and `@opentelemetry/sdk-trace-base` is already
+  a `devDependency`.
+
 ### Added — Iteration 6 commit 2 (correlationId threading + provider trace headers)
 
 - `src/routing/events.ts`: two net-new types formalising the

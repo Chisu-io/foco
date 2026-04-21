@@ -35,7 +35,13 @@
  *  - `providerForModel` + `routingMismatchUserMessage` helpers.
  */
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { SpanKind, SpanStatusCode } from '@opentelemetry/api';
+import {
+  BasicTracerProvider,
+  InMemorySpanExporter,
+  SimpleSpanProcessor,
+} from '@opentelemetry/sdk-trace-base';
 
 import {
   type FlagsReader,
@@ -44,6 +50,11 @@ import {
 } from '../../src/config/index.js';
 import { make, type LLMCallError } from '../../src/errors/taxonomy.js';
 import { InMemoryMetrics } from '../../src/observability/metrics.js';
+import {
+  hashUserId,
+  resetTracer,
+  setTracer,
+} from '../../src/observability/tracing.js';
 import type {
   Provider,
   ProviderCallInput,
@@ -1306,5 +1317,436 @@ describe('PlanRouter — AbortSignal plumbing', () => {
 
     expect(res.ok).toBe(true);
     expect(provider.callLog[0]!.abortSignal).toBe(ac.signal);
+  });
+});
+
+// ─── OTel spans — iter 6 commit 3 (§10.1) ─────────────────────────────
+//
+// Hermetic test block for the `llm.client.call` root span +
+// `llm.provider.request` sub-span emitted by `plan-router.ts`. Each
+// spec wires a fresh `BasicTracerProvider` with a
+// `SimpleSpanProcessor` feeding an `InMemorySpanExporter` — then
+// injects that tracer via the commit-1 DI seam (`setTracer`). Specs
+// assert on the exporter's `getFinishedSpans()`.
+//
+// Parent-child linkage across `await` requires an
+// `AsyncHooksContextManager` that we do NOT install in tests (prod
+// installs one in the `@chisu/observability` package). Without it,
+// the sub-span is emitted as an independent root — the specs below
+// assert on presence + attributes + kind + status of each span
+// individually, not on hierarchy. This matches the contract: OTel
+// parentage is a runtime-level concern, span content is a
+// code-level concern.
+//
+// Signed constraints enforced (iter 6 commit 3 mini-spec,
+// 2026-04-20):
+//  - R1: `llm.funding_mode` is stamped at close-success only, and is
+//    DERIVED from the routing result (never from input).
+//  - R2: `trace.idempotency_key_hash` is NEVER present on any span —
+//    iter 7 facade owns it because `RouteInput` has no idempotency
+//    key.
+//  - R3: error path uses manual `setStatus(ERROR)` — NEVER
+//    `recordException` (route() returns `Result<_, LLMCallError>`;
+//    LLMCallError is a tagged union, not an `Error`).
+
+describe('PlanRouter — OTel spans (iter 6 commit 3, §10.1)', () => {
+  let exporter: InMemorySpanExporter;
+  let tracerProvider: BasicTracerProvider;
+  let provider: FakeProvider;
+  let resolver: FakeResolver;
+  let metrics: InMemoryMetrics;
+
+  beforeEach(() => {
+    exporter = new InMemorySpanExporter();
+    // OTel JS ≥1.26 — spanProcessors via constructor; post-hoc
+    // `addSpanProcessor` is deprecated.
+    tracerProvider = new BasicTracerProvider({
+      spanProcessors: [new SimpleSpanProcessor(exporter)],
+    });
+    setTracer(tracerProvider.getTracer('plan-router-test'));
+
+    provider = new FakeProvider('anthropic');
+    resolver = new FakeResolver();
+    metrics = new InMemoryMetrics();
+  });
+
+  afterEach(async () => {
+    resetTracer();
+    exporter.reset();
+    await tracerProvider.shutdown();
+  });
+
+  /** Convenience: build + invoke the router with the shared stubs. */
+  function routeWith(
+    input: RouteInput,
+    breaker: CircuitBreaker = closedBreaker(),
+    onByokKeyInvalidated?: (args: {
+      readonly userId: string;
+      readonly provider: ProviderName;
+    }) => void,
+  ): ReturnType<PlanRouter['route']> {
+    const router = buildRouter(
+      provider,
+      resolver,
+      breaker,
+      metrics,
+      onByokKeyInvalidated,
+    );
+    return router.route(input);
+  }
+
+  it('happy BYOK (Free) — root span OK has the seven close attrs; sub-span OK has token counts', async () => {
+    resolver.enqueueByokSuccess('sk-byok-xyz', 'anthropic');
+    provider.enqueueSuccess({
+      modelUsed: 'claude-sonnet-4-6',
+      providerUsed: 'anthropic',
+    });
+
+    const res = await routeWith({
+      user: {
+        userId: 'u-obs-1',
+        plan: 'free',
+        llmKeyProvider: 'anthropic',
+        llmKeyStatus: 'active',
+      },
+      request: baseRequest(),
+      correlationId: DEFAULT_CORR_ID,
+      origin: DEFAULT_ORIGIN,
+    });
+    expect(res.ok).toBe(true);
+
+    const spans = exporter.getFinishedSpans();
+    const rootSpan = spans.find((s) => s.name === 'llm.client.call');
+    const subSpan = spans.find((s) => s.name === 'llm.provider.request');
+    expect(rootSpan).toBeDefined();
+    expect(subSpan).toBeDefined();
+
+    // Root open attrs.
+    expect(rootSpan!.kind).toBe(SpanKind.CLIENT);
+    expect(rootSpan!.attributes['llm.origin']).toBe('caption-refine');
+    // user.id_hash: sha256(userId) — never the raw id.
+    expect(rootSpan!.attributes['user.id_hash']).toBe(hashUserId('u-obs-1'));
+    expect(rootSpan!.attributes['user.id_hash']).not.toBe('u-obs-1');
+    expect(String(rootSpan!.attributes['user.id_hash'])).toMatch(
+      /^[0-9a-f]{64}$/,
+    );
+
+    // Root close-success attrs (seven total per §10.1 / R1).
+    expect(rootSpan!.attributes['llm.provider']).toBe('anthropic');
+    expect(rootSpan!.attributes['llm.model']).toBe('claude-sonnet-4-6');
+    expect(rootSpan!.attributes['llm.input_tokens']).toBe(10);
+    expect(rootSpan!.attributes['llm.output_tokens']).toBe(4);
+    expect(rootSpan!.attributes['llm.funding_mode']).toBe('byok');
+    expect(rootSpan!.attributes['llm.circuit_state']).toBe('closed');
+    expect(typeof rootSpan!.attributes['llm.latency_ms']).toBe('number');
+    expect(rootSpan!.attributes['llm.latency_ms']).toBeGreaterThanOrEqual(0);
+    expect(rootSpan!.status.code).toBe(SpanStatusCode.OK);
+
+    // Sub-span attrs.
+    expect(subSpan!.kind).toBe(SpanKind.CLIENT);
+    expect(subSpan!.attributes['llm.provider']).toBe('anthropic');
+    expect(subSpan!.attributes['llm.model']).toBe('claude-sonnet-4-6');
+    expect(subSpan!.attributes['llm.input_tokens']).toBe(10);
+    expect(subSpan!.attributes['llm.output_tokens']).toBe(4);
+    expect(subSpan!.status.code).toBe(SpanStatusCode.OK);
+  });
+
+  it('happy Managed (Influencer, preferMyKey default off) — root stamps llm.funding_mode=managed (R1 — derived, not from input)', async () => {
+    resolver.enqueueManagedSuccess('sk-mng', 'anthropic');
+    provider.enqueueSuccess();
+
+    const res = await routeWith({
+      user: { userId: 'u-obs-2', plan: 'influencer' },
+      request: baseRequest(),
+      correlationId: DEFAULT_CORR_ID,
+      origin: DEFAULT_ORIGIN,
+    });
+    expect(res.ok).toBe(true);
+
+    const rootSpan = exporter
+      .getFinishedSpans()
+      .find((s) => s.name === 'llm.client.call');
+    expect(rootSpan!.attributes['llm.funding_mode']).toBe('managed');
+    expect(rootSpan!.attributes['llm.provider']).toBe('anthropic');
+    expect(rootSpan!.status.code).toBe(SpanStatusCode.OK);
+  });
+
+  it('BYOK → Managed fallback on invalid_key — two sub-spans (first ERROR, second OK); root OK with funding_mode=managed', async () => {
+    resolver.enqueueByokSuccess('sk-user-bad', 'anthropic');
+    resolver.enqueueManagedSuccess('sk-mng-good', 'anthropic');
+    provider.enqueueError(make.invalidKey('anthropic'));
+    provider.enqueueSuccess();
+
+    const res = await routeWith({
+      user: {
+        userId: 'u-fb',
+        plan: 'influencer',
+        llmKeyProvider: 'anthropic',
+        llmKeyStatus: 'active',
+        llmPreferMyKey: true,
+      },
+      request: baseRequest(),
+      correlationId: DEFAULT_CORR_ID,
+      origin: DEFAULT_ORIGIN,
+    });
+    expect(res.ok).toBe(true);
+
+    const spans = exporter.getFinishedSpans();
+    const subSpans = spans.filter((s) => s.name === 'llm.provider.request');
+    expect(subSpans).toHaveLength(2);
+    // SimpleSpanProcessor exports in end-order: BYOK (error) first,
+    // Managed (ok) second.
+    expect(subSpans[0]!.status.code).toBe(SpanStatusCode.ERROR);
+    expect(subSpans[0]!.status.message).toBe('invalid_key');
+    expect(subSpans[0]!.attributes['llm.input_tokens']).toBeUndefined();
+    expect(subSpans[1]!.status.code).toBe(SpanStatusCode.OK);
+    expect(subSpans[1]!.attributes['llm.input_tokens']).toBe(10);
+
+    const rootSpan = spans.find((s) => s.name === 'llm.client.call')!;
+    expect(rootSpan.status.code).toBe(SpanStatusCode.OK);
+    expect(rootSpan.attributes['llm.funding_mode']).toBe('managed');
+  });
+
+  it('breaker deny — root ERROR with llm.circuit_state=open; no sub-span (provider.call never attempted)', async () => {
+    resolver.enqueueManagedSuccess('sk-mng', 'anthropic');
+    // provider.outcomes stays empty — breaker short-circuits first.
+
+    const res = await routeWith(
+      {
+        user: { userId: 'u-open', plan: 'influencer' },
+        request: baseRequest(),
+        correlationId: DEFAULT_CORR_ID,
+        origin: DEFAULT_ORIGIN,
+      },
+      openBreaker(),
+    );
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.error.kind).toBe('provider_down');
+
+    const spans = exporter.getFinishedSpans();
+    expect(
+      spans.filter((s) => s.name === 'llm.provider.request'),
+    ).toHaveLength(0);
+
+    const rootSpan = spans.find((s) => s.name === 'llm.client.call')!;
+    expect(rootSpan.status.code).toBe(SpanStatusCode.ERROR);
+    expect(rootSpan.status.message).toBe('provider_down');
+    expect(rootSpan.attributes['llm.circuit_state']).toBe('open');
+    // Error path stamps only llm.circuit_state — no close-success attrs.
+    expect(rootSpan.attributes['llm.funding_mode']).toBeUndefined();
+    expect(rootSpan.attributes['llm.latency_ms']).toBeUndefined();
+    expect(rootSpan.attributes['llm.input_tokens']).toBeUndefined();
+    expect(rootSpan.attributes['llm.output_tokens']).toBeUndefined();
+    // R3: error path NEVER records an exception — the taxonomy is the
+    // audit trail. `LLMCallError` is a tagged union, not an Error.
+    expect(rootSpan.events).toHaveLength(0);
+  });
+
+  it('provider error (rate_limit on Free BYOK) — root ERROR + sub-span ERROR, both with status message=rate_limit; no span events', async () => {
+    resolver.enqueueByokSuccess('sk-rl', 'anthropic');
+    provider.enqueueError(make.rateLimit('anthropic'));
+
+    const res = await routeWith({
+      user: {
+        userId: 'u-rl',
+        plan: 'free',
+        llmKeyProvider: 'anthropic',
+        llmKeyStatus: 'active',
+      },
+      request: baseRequest(),
+      correlationId: DEFAULT_CORR_ID,
+      origin: DEFAULT_ORIGIN,
+    });
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.error.kind).toBe('rate_limit');
+
+    const spans = exporter.getFinishedSpans();
+    const subSpan = spans.find((s) => s.name === 'llm.provider.request')!;
+    expect(subSpan.status.code).toBe(SpanStatusCode.ERROR);
+    expect(subSpan.status.message).toBe('rate_limit');
+    expect(subSpan.attributes['llm.input_tokens']).toBeUndefined();
+    expect(subSpan.attributes['llm.output_tokens']).toBeUndefined();
+    expect(subSpan.events).toHaveLength(0); // R3 — no recordException
+
+    const rootSpan = spans.find((s) => s.name === 'llm.client.call')!;
+    expect(rootSpan.status.code).toBe(SpanStatusCode.ERROR);
+    expect(rootSpan.status.message).toBe('rate_limit');
+    expect(rootSpan.attributes['llm.circuit_state']).toBe('closed');
+    expect(rootSpan.events).toHaveLength(0); // R3 — no recordException
+  });
+
+  it('plan_requires_key (Free with no key on file) — root ERROR with message=plan_requires_key; no sub-span (resolver never reached)', async () => {
+    const res = await routeWith({
+      user: {
+        userId: 'u-nk',
+        plan: 'free',
+        llmKeyProvider: undefined,
+        llmKeyStatus: 'unset',
+      },
+      request: baseRequest(),
+      correlationId: DEFAULT_CORR_ID,
+      origin: DEFAULT_ORIGIN,
+    });
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.error.kind).toBe('plan_requires_key');
+
+    const spans = exporter.getFinishedSpans();
+    expect(
+      spans.filter((s) => s.name === 'llm.provider.request'),
+    ).toHaveLength(0);
+    const rootSpan = spans.find((s) => s.name === 'llm.client.call')!;
+    expect(rootSpan.status.code).toBe(SpanStatusCode.ERROR);
+    expect(rootSpan.status.message).toBe('plan_requires_key');
+    expect(rootSpan.attributes['llm.circuit_state']).toBe('closed');
+  });
+
+  it('unregistered provider (misconfigured registry) — root ERROR with message=internal; no sub-span', async () => {
+    const router = createPlanRouter({
+      providers: emptyRegistry(),
+      resolver,
+      breaker: closedBreaker(),
+      flags: flags(),
+      metrics,
+    });
+
+    const res = await router.route({
+      user: { userId: 'u-mis', plan: 'influencer' },
+      request: baseRequest(),
+      correlationId: DEFAULT_CORR_ID,
+      origin: DEFAULT_ORIGIN,
+    });
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.error.kind).toBe('internal');
+
+    const spans = exporter.getFinishedSpans();
+    expect(
+      spans.filter((s) => s.name === 'llm.provider.request'),
+    ).toHaveLength(0);
+    const rootSpan = spans.find((s) => s.name === 'llm.client.call')!;
+    expect(rootSpan.status.code).toBe(SpanStatusCode.ERROR);
+    expect(rootSpan.status.message).toBe('internal');
+  });
+
+  it('R2 canary — `trace.idempotency_key_hash` is NEVER present on any emitted span (commit 3 omits it by design)', async () => {
+    // Three representative paths — happy BYOK, happy Managed, BYOK
+    // error — so the canary exercises every span the router can emit.
+    resolver.enqueueByokSuccess('sk-1', 'anthropic');
+    provider.enqueueSuccess();
+    await routeWith({
+      user: {
+        userId: 'u-r2-a',
+        plan: 'free',
+        llmKeyProvider: 'anthropic',
+        llmKeyStatus: 'active',
+      },
+      request: baseRequest(),
+      correlationId: 'corr-r2-a',
+      origin: 'caption-refine',
+    });
+
+    resolver.enqueueManagedSuccess('sk-2', 'anthropic');
+    provider.enqueueSuccess();
+    await routeWith({
+      user: { userId: 'u-r2-b', plan: 'influencer' },
+      request: baseRequest(),
+      correlationId: 'corr-r2-b',
+      origin: 'hook-brainstorm',
+    });
+
+    resolver.enqueueByokSuccess('sk-3', 'anthropic');
+    provider.enqueueError(make.rateLimit('anthropic'));
+    await routeWith({
+      user: {
+        userId: 'u-r2-c',
+        plan: 'free',
+        llmKeyProvider: 'anthropic',
+        llmKeyStatus: 'active',
+      },
+      request: baseRequest(),
+      correlationId: 'corr-r2-c',
+      origin: 'mcp-server-callback',
+    });
+
+    const spans = exporter.getFinishedSpans();
+    // 3 root + 3 sub = 6 spans. Resolver errors / breaker denies in
+    // other specs open no sub-span; happy paths here give one of each.
+    expect(spans.length).toBeGreaterThanOrEqual(6);
+    for (const span of spans) {
+      expect(span.attributes['trace.idempotency_key_hash']).toBeUndefined();
+    }
+  });
+
+  it('zero-leak §14.3 — no raw key material, Bearer token, Authorization header, or raw userId appears in any span attribute value', async () => {
+    const rawKey = 'sk-should-never-leak-abc123';
+    const rawUserId = 'u-raw-should-not-appear';
+    resolver.enqueueByokSuccess(rawKey, 'anthropic');
+    provider.enqueueSuccess();
+
+    await routeWith({
+      user: {
+        userId: rawUserId,
+        plan: 'free',
+        llmKeyProvider: 'anthropic',
+        llmKeyStatus: 'active',
+      },
+      request: baseRequest(),
+      correlationId: DEFAULT_CORR_ID,
+      origin: DEFAULT_ORIGIN,
+    });
+
+    const spans = exporter.getFinishedSpans();
+    // Attribute-value leak patterns we must never emit (§14.3).
+    const leakPatterns: readonly RegExp[] = [
+      /^sk-/, // API key sentinel (Anthropic/OpenAI-style)
+      /bearer\s/i, // "Bearer <token>"
+      /authorization/i, // "Authorization" header name or value
+    ];
+    for (const span of spans) {
+      for (const value of Object.values(span.attributes)) {
+        // attributes can be string | number | boolean | arrays — coerce
+        // to string for a broad substring scan. OTel attribute values
+        // are never objects in our emission sites.
+        const str =
+          typeof value === 'string'
+            ? value
+            : Array.isArray(value)
+              ? value.join('|')
+              : String(value);
+        expect(str).not.toContain(rawKey);
+        expect(str).not.toContain(rawUserId);
+        for (const pat of leakPatterns) {
+          expect(str).not.toMatch(pat);
+        }
+      }
+    }
+  });
+
+  it('no-op tracer fallback — after resetTracer(), route() still succeeds; exporter sees zero spans', async () => {
+    // Drop the injected tracer so `getTracer()` falls through to the
+    // global no-op tracer (per commit 1 DI seam). The call site must
+    // not throw and the caller must receive a correct Result.
+    resetTracer();
+    resolver.enqueueByokSuccess('sk-noop', 'anthropic');
+    provider.enqueueSuccess();
+
+    const res = await routeWith({
+      user: {
+        userId: 'u-np',
+        plan: 'free',
+        llmKeyProvider: 'anthropic',
+        llmKeyStatus: 'active',
+      },
+      request: baseRequest(),
+      correlationId: DEFAULT_CORR_ID,
+      origin: DEFAULT_ORIGIN,
+    });
+    expect(res.ok).toBe(true);
+    // No-op tracer does not feed our exporter — the contract is
+    // "withSpan / startSpan must not throw without an SDK".
+    expect(exporter.getFinishedSpans()).toHaveLength(0);
   });
 });

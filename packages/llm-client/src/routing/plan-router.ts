@@ -45,9 +45,18 @@
  *    provider map leaves no routing degree of freedom to respect it.
  */
 
+import {
+  context,
+  SpanKind,
+  SpanStatusCode,
+  trace,
+  type Span,
+} from '@opentelemetry/api';
+
 import type { FlagsReader } from '../config/flag-reader.js';
 import { make, type LLMCallError } from '../errors/taxonomy.js';
 import type { Metrics } from '../observability/metrics.js';
+import { getTracer, hashUserId } from '../observability/tracing.js';
 import type { Provider, ProviderName } from '../providers/provider.js';
 import { type Result, err, ok } from '../types.js';
 import type { ModelId, NormalizedLLMRequest } from '../types/request.js';
@@ -308,31 +317,68 @@ export function createPlanRouter(deps: PlanRouterDeps): PlanRouter {
         provider: provider.name,
         decision,
       });
+      // Iter 6 commit 3 (§10.1): breaker-deny does NOT open a
+      // `llm.provider.request` span. The outbound HTTP never happens, so
+      // there is nothing to observe at the provider layer. The root
+      // `llm.client.call` span reflects the denial via
+      // `llm.circuit_state` at close-error.
       return err(make.providerDown(provider.name, true));
     }
 
-    // Iter 6 commit 2 (P1, P11): `correlationId` is threaded into the
-    // adapter so Anthropic + OpenAI can stamp their trace header. See
-    // `provider.ts` → `ProviderCallInput.correlationId`. The breaker
-    // call above does NOT receive it — breaker state is provider-wide
-    // and correlation-agnostic by design (iter 4 invariant).
-    const callResult = await provider.call({
-      apiKey: resolved.apiKey,
-      request,
-      correlationId,
-      ...(abortSignal !== undefined ? { abortSignal } : {}),
+    // Iter 6 commit 3 (§10.1): open a CLIENT sub-span around the
+    // outbound provider call. Initial attributes are `llm.provider`
+    // + `llm.model`; token counts and status land at close. No
+    // `recordException` — `provider.call(...)` returns
+    // `Result<_, LLMCallError>` and LLMCallError is a tagged union, not
+    // an Error instance. Status is set manually on the Result branch.
+    const tracer = getTracer();
+    const subSpan = tracer.startSpan('llm.provider.request', {
+      kind: SpanKind.CLIENT,
+      attributes: {
+        'llm.provider': provider.name,
+        'llm.model': request.model,
+      },
     });
 
-    if (callResult.ok) {
-      breaker.record(provider.name, 'success');
-      return ok({ ...callResult.value, fundingMode: resolved.mode });
-    }
+    try {
+      // Iter 6 commit 2 (P1, P11): `correlationId` is threaded into the
+      // adapter so Anthropic + OpenAI can stamp their trace header. See
+      // `provider.ts` → `ProviderCallInput.correlationId`. The breaker
+      // call above does NOT receive it — breaker state is provider-wide
+      // and correlation-agnostic by design (iter 4 invariant).
+      const callResult = await provider.call({
+        apiKey: resolved.apiKey,
+        request,
+        correlationId,
+        ...(abortSignal !== undefined ? { abortSignal } : {}),
+      });
 
-    breaker.record(
-      provider.name,
-      classifyOutcomeForBreaker(callResult.error),
-    );
-    return err(callResult.error);
+      if (callResult.ok) {
+        subSpan.setAttribute(
+          'llm.input_tokens',
+          callResult.value.usage.inputTokens,
+        );
+        subSpan.setAttribute(
+          'llm.output_tokens',
+          callResult.value.usage.outputTokens,
+        );
+        subSpan.setStatus({ code: SpanStatusCode.OK });
+        breaker.record(provider.name, 'success');
+        return ok({ ...callResult.value, fundingMode: resolved.mode });
+      }
+
+      subSpan.setStatus({
+        code: SpanStatusCode.ERROR,
+        message: callResult.error.kind,
+      });
+      breaker.record(
+        provider.name,
+        classifyOutcomeForBreaker(callResult.error),
+      );
+      return err(callResult.error);
+    } finally {
+      subSpan.end();
+    }
   }
 
   /**
@@ -585,23 +631,129 @@ export function createPlanRouter(deps: PlanRouterDeps): PlanRouter {
   async function route(
     input: RouteInput,
   ): Promise<Result<RouterCallOutput, LLMCallError>> {
+    // Iter 6 commit 3 (§10.1): open the `llm.client.call` root span.
+    // We do NOT delegate to `withSpan` here because:
+    //  1. `route()` never throws — it returns `Result<_, LLMCallError>`
+    //     (§3.5 of the contract). `withSpan` would auto-stamp
+    //     `SpanStatusCode.OK` on return, overwriting the manual
+    //     `ERROR` we set on the Result.err branch (R3 of the mini-spec).
+    //  2. `LLMCallError` is a tagged union, not an `Error` instance, so
+    //     `recordException(...)` (also part of `withSpan`'s catch)
+    //     would lie about the stack. The taxonomy is the audit trail
+    //     per §14.3 — we never recordException a Result.err.
+    //
+    // Attribute-close contract (from the signed mini-spec):
+    //  - On open: `llm.origin`, `user.id_hash`.
+    //  - On close-success (seven effective attributes): `llm.provider`,
+    //    `llm.model`, `llm.input_tokens`, `llm.output_tokens`,
+    //    `llm.funding_mode` (DERIVED from the routing result per R1 —
+    //    the router never receives a `fundingMode` on input),
+    //    `llm.circuit_state`, `llm.latency_ms`.
+    //  - On close-error: ONLY `llm.circuit_state` + status ERROR with
+    //    `message = result.error.kind`. No `recordException`.
+    //
+    // `trace.idempotency_key_hash` is deliberately omitted in commit 3
+    // (R2 of the mini-spec); the iter 8 client facade owns it because
+    // `RouteInput` does not carry an idempotency key.
+    const tracer = getTracer();
+    const startHrMs = performance.now();
     const requiredProvider = providerForModel(input.request.model);
-    const provider = providers.get(requiredProvider);
-    if (provider === undefined) {
-      // Deployment misconfiguration — a supported model maps to an
-      // unconfigured provider. Surface `internal` with the caller's
-      // correlation id (P10 of iter 6 commit 2 design): we no longer
-      // mint a fresh id here, because the client already owns the
-      // identity for this call and downstream observers (OTel root
-      // span, audit log) must be able to stitch this error back to
-      // the same request.
-      return err(make.internal(input.correlationId));
-    }
 
-    if (input.user.plan === 'free' || input.user.plan === 'creator') {
-      return routeByokOnly(input, requiredProvider, provider);
+    const rootSpan = tracer.startSpan('llm.client.call', {
+      kind: SpanKind.CLIENT,
+      attributes: {
+        'llm.origin': input.origin,
+        'user.id_hash': hashUserId(input.user.userId),
+      },
+    });
+
+    try {
+      // Make the root span the active span so any child span started
+      // inside `routeByokOnly` / `routeManagedWithOptionalByok` (and,
+      // in particular, `doProviderCall`'s `llm.provider.request`) picks
+      // it up as parent. In tests without an `AsyncHooksContextManager`
+      // the active context is lost across `await`, so the sub-span is
+      // emitted as an independent root — the hermetic specs assert on
+      // the presence and attributes of each span, not on parent linkage.
+      const result = await context.with(
+        trace.setSpan(context.active(), rootSpan),
+        (): Promise<Result<RouterCallOutput, LLMCallError>> => {
+          const provider = providers.get(requiredProvider);
+          if (provider === undefined) {
+            // Deployment misconfiguration — a supported model maps to
+            // an unconfigured provider. Surface `internal` with the
+            // caller's correlation id (P10 of iter 6 commit 2): we no
+            // longer mint a fresh id here, because the client already
+            // owns the identity for this call and downstream observers
+            // (OTel root span, audit log) must be able to stitch this
+            // error back to the same request.
+            return Promise.resolve(err(make.internal(input.correlationId)));
+          }
+
+          if (
+            input.user.plan === 'free' ||
+            input.user.plan === 'creator'
+          ) {
+            return routeByokOnly(input, requiredProvider, provider);
+          }
+          return routeManagedWithOptionalByok(input, provider);
+        },
+      );
+
+      const latencyMs = Math.round(performance.now() - startHrMs);
+      stampRootSpanClose(rootSpan, result, requiredProvider, latencyMs);
+      return result;
+    } finally {
+      rootSpan.end();
     }
-    return routeManagedWithOptionalByok(input, provider);
+  }
+
+  /**
+   * Stamp the close-time attributes + status on the `llm.client.call`
+   * root span.
+   *
+   * Success path (seven attributes): `llm.provider`, `llm.model`,
+   * `llm.input_tokens`, `llm.output_tokens`, `llm.funding_mode`,
+   * `llm.circuit_state`, `llm.latency_ms`. Status OK.
+   *
+   * Error path (ONE attribute + status): `llm.circuit_state`. Status
+   * ERROR with `message = result.error.kind`. No `recordException` —
+   * `LLMCallError` is a tagged union per §3.5, not an `Error`.
+   */
+  function stampRootSpanClose(
+    rootSpan: Span,
+    result: Result<RouterCallOutput, LLMCallError>,
+    requiredProvider: ProviderName,
+    latencyMs: number,
+  ): void {
+    if (result.ok) {
+      rootSpan.setAttribute('llm.provider', result.value.providerUsed);
+      rootSpan.setAttribute('llm.model', result.value.modelUsed);
+      rootSpan.setAttribute(
+        'llm.input_tokens',
+        result.value.usage.inputTokens,
+      );
+      rootSpan.setAttribute(
+        'llm.output_tokens',
+        result.value.usage.outputTokens,
+      );
+      rootSpan.setAttribute('llm.funding_mode', result.value.fundingMode);
+      rootSpan.setAttribute(
+        'llm.circuit_state',
+        breaker.currentState(result.value.providerUsed),
+      );
+      rootSpan.setAttribute('llm.latency_ms', latencyMs);
+      rootSpan.setStatus({ code: SpanStatusCode.OK });
+      return;
+    }
+    rootSpan.setAttribute(
+      'llm.circuit_state',
+      breaker.currentState(requiredProvider),
+    );
+    rootSpan.setStatus({
+      code: SpanStatusCode.ERROR,
+      message: result.error.kind,
+    });
   }
 
   return Object.freeze({ route });

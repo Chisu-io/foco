@@ -315,6 +315,84 @@ apply:
 signed amendment — the `test/routing/events.test.ts` exhaustiveness
 canary will fail to compile otherwise.
 
+### `llm.client.call` + `llm.provider.request` spans (iter 6 commit 3)
+
+Commit 3 lights up the actual span emission sites defined by
+`LLM_CLIENT.md v1.1` §10.1. Both spans are created inside the routing
+layer (`src/routing/plan-router.ts`); no other layer emits top-level
+spans.
+
+| Span                   | Kind     | Opened by         | Closed by                |
+| ---------------------- | -------- | ----------------- | ------------------------ |
+| `llm.client.call`      | `CLIENT` | `route()`         | `route()`'s `finally`    |
+| `llm.provider.request` | `CLIENT` | `doProviderCall()`| `doProviderCall()`'s `finally` — only when `breaker.isCallAllowed(...)` returns `allow` (breaker-deny opens no sub-span) |
+
+**`llm.client.call` — open attrs:** `llm.origin` (the `OriginKind`
+literal from `RouteInput.origin`) and `user.id_hash`
+(`sha256(userId)` — the raw id never reaches the span).
+
+**`llm.client.call` — close-success attrs (seven total):**
+`llm.provider`, `llm.model`, `llm.input_tokens`, `llm.output_tokens`,
+`llm.funding_mode`, `llm.circuit_state`, `llm.latency_ms`. Status `OK`.
+
+**`llm.client.call` — close-error attrs:** only `llm.circuit_state`.
+Status `ERROR` with `message = error.kind` (e.g. `"rate_limit"`,
+`"provider_down"`, `"plan_requires_key"`, `"internal"`).
+
+**`llm.provider.request` — open attrs:** `llm.provider`, `llm.model`.
+
+**`llm.provider.request` — close-success attrs:** `llm.input_tokens`,
+`llm.output_tokens`. Status `OK`.
+
+**`llm.provider.request` — close-error attrs:** none beyond open attrs.
+Status `ERROR` with `message = error.kind`.
+
+Three signed constraints (iter 6 commit 3 mini-spec, 2026-04-20):
+
+1. **R1 — `llm.funding_mode` is derived, not input.** The router never
+   receives `fundingMode` on `RouteInput`. The attribute is stamped at
+   close-success from `result.value.fundingMode`, which in turn comes
+   from the `ResolvedKey.mode` assigned by the resolver at the point
+   each provider call was made. That is why the BYOK → Managed
+   fallback path correctly stamps `llm.funding_mode='managed'` — the
+   effective mode is what the routing outcome records, not what the
+   caller intended.
+2. **R2 — no `trace.idempotency_key_hash` in commit 3.** `RouteInput`
+   does not carry an idempotency key; the iter 7 client facade owns
+   it and will stamp the attribute when it threads the key through
+   to the router. A canary spec in `test/routing/plan-router.test.ts`
+   ensures the attribute is absent on every emitted span today.
+3. **R3 — manual `setStatus(ERROR)`, never `recordException`.**
+   `route()` never throws: it returns `Result<_, LLMCallError>` per
+   §3.5. `LLMCallError` is a tagged union, not an `Error` instance, so
+   calling `span.recordException(errorObj)` would lie about the stack.
+   Both the root and sub-span are implemented with
+   `tracer.startSpan(...)` + manual `setStatus` + `try/finally`
+   rather than via the commit-1 `withSpan` helper, because `withSpan`
+   auto-stamps `SpanStatusCode.OK` on return (clobbering the manual
+   `ERROR` on `Result.err`) and auto-`recordException`s on throw. The
+   `withSpan` helper remains in place for call sites that do throw
+   natively (e.g. the forthcoming `llm.kms.decrypt_dek` sub-span in
+   commit 4, which wraps an `Error`-throwing KMS client).
+
+**Parent-child linkage.** `route()` runs its routing body inside
+`context.with(trace.setSpan(context.active(), rootSpan), ...)`. In
+production hosts that install an `AsyncHooksContextManager` (done in
+`@chisu/observability`), the `llm.provider.request` span picks up
+`llm.client.call` as its parent. In hermetic specs without that
+manager the sub-span emits as an independent root — tests assert
+per-span content and kind, not hierarchy.
+
+**No breaker-deny span.** When `breaker.isCallAllowed(provider.name)`
+returns `deny_open` or `deny_probes_exhausted`, `doProviderCall()`
+returns `err(provider_down)` before opening a `llm.provider.request`
+span. The outbound HTTP never happens — there is nothing to observe
+at the provider layer. The root span still closes with
+`llm.circuit_state='open'`.
+
+**Latency.** Measured via `performance.now()` (monotonic) and rounded
+to integer milliseconds before being stamped on `llm.latency_ms`.
+
 ### Facade `correlationId` policy (iter 8 upcoming)
 
 Internal APIs introduced in iter 6 commits 2+ require
