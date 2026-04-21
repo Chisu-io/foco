@@ -43,6 +43,22 @@
  *    provider, funding mode, outcome on the metric sink.
  *  - `providerHint` is informational only for MVP — the 1:1 model →
  *    provider map leaves no routing degree of freedom to respect it.
+ *
+ * **Iter 7 commit 4 additions (accounting wiring — §4.1 + §4.2):**
+ *
+ *  The router consumes the `ConsentResolver` (reader) and
+ *  `UsageRecorder` (writer) seams introduced in iter 7 commits 2 and
+ *  3. Every `.call()` emits ONE `UsageEntry` per wire-touching attempt
+ *  per the signed §4.2 matrix — billable kinds (`rate_limit`,
+ *  `quota_exhausted`, `provider_down`, `content_blocked`,
+ *  `network_error`, `internal`) record a 0/0-token row; pre-call
+ *  rejects (`invalid_key`, `context_too_long`, `kms_unavailable`,
+ *  `routing_disabled`, `plan_requires_key`) record NO row. CB deny,
+ *  router-minted `internal` from an unregistered provider, and
+ *  router-resolver failures never touch the wire → no row. Consent +
+ *  `promptHash` + `traceId` are computed once per `.call()` and
+ *  shared across the two attempts of a BYOK→Managed fallback so
+ *  abuse-detection sees one logical call across two rows.
  */
 
 import {
@@ -53,6 +69,12 @@ import {
   type Span,
 } from '@opentelemetry/api';
 
+import {
+  hashNormalizedRequest,
+  type ConsentResolver,
+  type UsageEntry,
+  type UsageRecorder,
+} from '../accounting/index.js';
 import type { FlagsReader } from '../config/flag-reader.js';
 import { make, type LLMCallError } from '../errors/taxonomy.js';
 import type { Metrics } from '../observability/metrics.js';
@@ -60,6 +82,7 @@ import { getTracer, hashUserId } from '../observability/tracing.js';
 import type { Provider, ProviderName } from '../providers/provider.js';
 import { type Result, err, ok } from '../types.js';
 import type { ModelId, NormalizedLLMRequest } from '../types/request.js';
+import type { ConsentMode } from '../types/repos.js';
 import type { ProviderCallOutput } from '../types/response.js';
 import type { CircuitBreaker } from './circuit-breaker.js';
 import { classifyOutcomeForBreaker, type OriginKind } from './events.js';
@@ -167,6 +190,27 @@ export interface PlanRouterDeps {
   readonly breaker: CircuitBreaker;
   readonly flags: FlagsReader;
   readonly metrics: Metrics;
+  /**
+   * Consent-mode reader (iter 7 commit 2 seam). Consulted once per
+   * `.call()` AFTER the unregistered-provider short-circuit so a
+   * deployment misconfiguration still returns `internal` without
+   * paying a consent round-trip. Non-throwing by contract (§8
+   * decisión firmada #8 — failures degrade to `'minimal'` inside
+   * the resolver).
+   */
+  readonly consentResolver: ConsentResolver;
+  /**
+   * Usage writer (iter 7 commit 3 seam). Called once per
+   * wire-touching attempt per §4.2. The router never awaits
+   * `usageRecorder.flush()` — that is the iter 8 facade's job on the
+   * 10 s timer.
+   */
+  readonly usageRecorder: UsageRecorder;
+  /**
+   * Clock used to stamp `UsageEntry.occurredAt`. Defaults to
+   * `() => new Date()`. Tests pin it for deterministic assertions.
+   */
+  readonly usageClock?: (() => Date) | undefined;
   /**
    * Invoked when a BYOK call returns `invalid_key` and the router
    * decides to fall back to Managed (Influencer+ `preferMyKey`) or
@@ -277,6 +321,60 @@ export function providerForModel(model: ModelId): ProviderName {
 }
 
 /**
+ * §4.2 accounting matrix — which `LLMCallError` kinds record a
+ * billable `UsageEntry` and which do not.
+ *
+ *  - **record (billable)**: `rate_limit`, `quota_exhausted`,
+ *    `provider_down`, `content_blocked`, `network_error`, `internal`.
+ *    These all imply the wire WAS touched (or, for `internal`, that a
+ *    real call produced an unexpected shape — which we attribute).
+ *  - **skip (pre-call reject)**: `invalid_key`, `context_too_long`,
+ *    `kms_unavailable`, `routing_disabled`, `plan_requires_key`.
+ *    These are user-environment errors that we rejected BEFORE the
+ *    wire call — no billable work was done.
+ *
+ * Paired with {@link assertNeverErrorKind} for exhaustiveness:
+ * widening the `LLMCallError` taxonomy fails typecheck at this switch,
+ * so the matrix never silently drifts.
+ */
+export function shouldRecordError(kind: LLMCallError['kind']): boolean {
+  switch (kind) {
+    case 'rate_limit':
+    case 'quota_exhausted':
+    case 'provider_down':
+    case 'content_blocked':
+    case 'network_error':
+    case 'internal':
+      return true;
+    case 'invalid_key':
+    case 'context_too_long':
+    case 'kms_unavailable':
+    case 'routing_disabled':
+    case 'plan_requires_key':
+      return false;
+    default:
+      return assertNeverErrorKind(kind);
+  }
+}
+
+/**
+ * Per-`.call()` accounting context threaded through the router.
+ *
+ * Computed once in `route()` and forwarded verbatim into
+ * `routeByokOnly` / `routeManagedWithOptionalByok` / `doProviderCall`.
+ * The two attempts of a BYOK→Managed fallback share the same
+ * `AccountingCtx` — that is the signal that they are attempts of ONE
+ * logical `.call()` in downstream abuse-detection (§4.2 + §4.3).
+ */
+interface AccountingCtx {
+  readonly userId: string;
+  readonly origin: OriginKind;
+  readonly consentMode: ConsentMode;
+  readonly promptHash: string;
+  readonly traceId: string;
+}
+
+/**
  * Extended user-facing message when a Free/Creator BYOK key belongs
  * to a provider that cannot serve the requested model.
  */
@@ -301,8 +399,51 @@ export function createPlanRouter(deps: PlanRouterDeps): PlanRouter {
     resolver,
     breaker,
     metrics,
+    consentResolver,
+    usageRecorder,
     onByokKeyInvalidated,
   } = deps;
+  const usageClock = deps.usageClock ?? ((): Date => new Date());
+
+  /**
+   * Centralised `UsageRecorder.record` call so all fields of
+   * `UsageEntry` are stamped from the same source of truth.
+   *
+   * `kekVersion` is attached conditionally — TS
+   * `exactOptionalPropertyTypes` makes `{ kekVersion: undefined }` a
+   * structurally different type from `{}`, so we branch at build
+   * time.
+   */
+  function recordUsage(args: {
+    readonly ctx: AccountingCtx;
+    readonly provider: ProviderName;
+    readonly model: ModelId;
+    readonly fundingMode: 'byok' | 'managed';
+    readonly inputTokens: number;
+    readonly outputTokens: number;
+    readonly latencyMs: number;
+    readonly kekVersion?: number | undefined;
+  }): void {
+    const base: UsageEntry = {
+      userId: args.ctx.userId,
+      occurredAt: usageClock(),
+      provider: args.provider,
+      model: args.model,
+      fundingMode: args.fundingMode,
+      origin: args.ctx.origin,
+      inputTokens: args.inputTokens,
+      outputTokens: args.outputTokens,
+      latencyMs: args.latencyMs,
+      traceId: args.ctx.traceId,
+      consentMode: args.ctx.consentMode,
+      promptHash: args.ctx.promptHash,
+      ...(args.kekVersion !== undefined ? { kekVersion: args.kekVersion } : {}),
+    };
+    // Fire-and-forget — the recorder is non-throwing by contract.
+    // Swallowing the Promise here is intentional: the router must
+    // not block on DB / buffer state.
+    void usageRecorder.record(base);
+  }
 
   async function doProviderCall(
     resolved: ResolvedKey,
@@ -310,6 +451,7 @@ export function createPlanRouter(deps: PlanRouterDeps): PlanRouter {
     request: NormalizedLLMRequest,
     abortSignal: AbortSignal | undefined,
     correlationId: string,
+    accountingCtx: AccountingCtx,
   ): Promise<Result<RouterCallOutput, LLMCallError>> {
     const decision = breaker.isCallAllowed(provider.name);
     if (decision === 'deny_open' || decision === 'deny_probes_exhausted') {
@@ -322,6 +464,11 @@ export function createPlanRouter(deps: PlanRouterDeps): PlanRouter {
       // there is nothing to observe at the provider layer. The root
       // `llm.client.call` span reflects the denial via
       // `llm.circuit_state` at close-error.
+      //
+      // Iter 7 commit 4 (§4.2): no `UsageEntry` either — the wire
+      // was never touched. `provider_down { circuitOpen: true }` is
+      // a billable kind on wire-touching attempts but here the CB
+      // short-circuits BEFORE the wire, so no row.
       return err(make.providerDown(provider.name, true));
     }
 
@@ -340,6 +487,13 @@ export function createPlanRouter(deps: PlanRouterDeps): PlanRouter {
       },
     });
 
+    // Iter 7 commit 4 (§5.3): per-attempt latency. Measured around
+    // `provider.call(...)` so two fallback attempts emit two
+    // independent `UsageEntry.latencyMs` values. Intentionally
+    // distinct from the root span's `llm.latency_ms` which is the
+    // `.call()` total.
+    const callStartHrMs = performance.now();
+
     try {
       // Iter 6 commit 2 (P1, P11): `correlationId` is threaded into the
       // adapter so Anthropic + OpenAI can stamp their trace header. See
@@ -353,6 +507,8 @@ export function createPlanRouter(deps: PlanRouterDeps): PlanRouter {
         ...(abortSignal !== undefined ? { abortSignal } : {}),
       });
 
+      const attemptLatencyMs = Math.round(performance.now() - callStartHrMs);
+
       if (callResult.ok) {
         subSpan.setAttribute(
           'llm.input_tokens',
@@ -364,6 +520,22 @@ export function createPlanRouter(deps: PlanRouterDeps): PlanRouter {
         );
         subSpan.setStatus({ code: SpanStatusCode.OK });
         breaker.record(provider.name, 'success');
+
+        // Iter 7 commit 4 (§4.2): record the successful attempt with
+        // real token counts. KEK version forwarded on BYOK rows only.
+        recordUsage({
+          ctx: accountingCtx,
+          provider: callResult.value.providerUsed,
+          model: request.model,
+          fundingMode: resolved.mode,
+          inputTokens: callResult.value.usage.inputTokens,
+          outputTokens: callResult.value.usage.outputTokens,
+          latencyMs: attemptLatencyMs,
+          ...(resolved.mode === 'byok' && resolved.kekVersion !== undefined
+            ? { kekVersion: resolved.kekVersion }
+            : {}),
+        });
+
         return ok({ ...callResult.value, fundingMode: resolved.mode });
       }
 
@@ -375,6 +547,26 @@ export function createPlanRouter(deps: PlanRouterDeps): PlanRouter {
         provider.name,
         classifyOutcomeForBreaker(callResult.error),
       );
+
+      // Iter 7 commit 4 (§4.2): record billable errors only. 0/0
+      // tokens — the wire was touched but no content exchanged. KEK
+      // version stays on BYOK error rows because the key WAS used to
+      // produce the failed call.
+      if (shouldRecordError(callResult.error.kind)) {
+        recordUsage({
+          ctx: accountingCtx,
+          provider: provider.name,
+          model: request.model,
+          fundingMode: resolved.mode,
+          inputTokens: 0,
+          outputTokens: 0,
+          latencyMs: attemptLatencyMs,
+          ...(resolved.mode === 'byok' && resolved.kekVersion !== undefined
+            ? { kekVersion: resolved.kekVersion }
+            : {}),
+        });
+      }
+
       return err(callResult.error);
     } finally {
       subSpan.end();
@@ -398,6 +590,7 @@ export function createPlanRouter(deps: PlanRouterDeps): PlanRouter {
     input: RouteInput,
     requiredProvider: ProviderName,
     provider: Provider,
+    accountingCtx: AccountingCtx,
   ): Promise<Result<RouterCallOutput, LLMCallError>> {
     const { user, request } = input;
     const plan = user.plan as 'free' | 'creator';
@@ -457,6 +650,7 @@ export function createPlanRouter(deps: PlanRouterDeps): PlanRouter {
       request,
       input.abortSignal,
       input.correlationId,
+      accountingCtx,
     );
 
     metrics.counter(ROUTER_METRIC_NAMES.requests, {
@@ -504,6 +698,7 @@ export function createPlanRouter(deps: PlanRouterDeps): PlanRouter {
   async function routeManagedWithOptionalByok(
     input: RouteInput,
     provider: Provider,
+    accountingCtx: AccountingCtx,
   ): Promise<Result<RouterCallOutput, LLMCallError>> {
     const { user, request } = input;
     const plan = user.plan;
@@ -531,6 +726,7 @@ export function createPlanRouter(deps: PlanRouterDeps): PlanRouter {
           request,
           input.abortSignal,
           input.correlationId,
+          accountingCtx,
         );
         if (byokOutcome.ok) {
           metrics.counter(ROUTER_METRIC_NAMES.requests, {
@@ -616,6 +812,7 @@ export function createPlanRouter(deps: PlanRouterDeps): PlanRouter {
       request,
       input.abortSignal,
       input.correlationId,
+      accountingCtx,
     );
 
     metrics.counter(ROUTER_METRIC_NAMES.requests, {
@@ -667,6 +864,22 @@ export function createPlanRouter(deps: PlanRouterDeps): PlanRouter {
       },
     });
 
+    // Iter 7 commit 4: kick off consent resolution BEFORE entering
+    // `context.with(...)` so the async repo read overlaps with the
+    // synchronous registry lookup. `consentResolver.resolve(...)` is
+    // non-throwing by contract (§8 decisión firmada #8). `promptHash`
+    // is computed once per `.call()` — the fallback shares the hash
+    // across both attempts so abuse-detection sees one logical call
+    // (§8 decisión firmada #1 — full 64-char SHA-256 hex).
+    //
+    // `traceId` comes from the root span's context. With the no-op
+    // tracer (production without an SDK installed) this is the
+    // 32-char zero hex — still valid, still non-PII. Tests with a
+    // `BasicTracerProvider` get a real trace id.
+    const consentPromise = consentResolver.resolve(input.user.userId);
+    const promptHash = hashNormalizedRequest(input.request);
+    const traceId = rootSpan.spanContext().traceId;
+
     try {
       // Make the root span the active span so any child span started
       // inside `routeByokOnly` / `routeManagedWithOptionalByok` (and,
@@ -677,7 +890,7 @@ export function createPlanRouter(deps: PlanRouterDeps): PlanRouter {
       // the presence and attributes of each span, not on parent linkage.
       const result = await context.with(
         trace.setSpan(context.active(), rootSpan),
-        (): Promise<Result<RouterCallOutput, LLMCallError>> => {
+        async (): Promise<Result<RouterCallOutput, LLMCallError>> => {
           const provider = providers.get(requiredProvider);
           if (provider === undefined) {
             // Deployment misconfiguration — a supported model maps to
@@ -687,16 +900,40 @@ export function createPlanRouter(deps: PlanRouterDeps): PlanRouter {
             // owns the identity for this call and downstream observers
             // (OTel root span, audit log) must be able to stitch this
             // error back to the same request.
-            return Promise.resolve(err(make.internal(input.correlationId)));
+            //
+            // Iter 7 commit 4 (§4.2): no `UsageEntry` either — the
+            // wire was never touched. Router-minted `internal` has no
+            // truthful `fundingMode` to attribute, so we deliberately
+            // skip recording. Consent WAS resolved (overlap above),
+            // but we discard the value — this is the cost of the
+            // non-throwing contract.
+            return err(make.internal(input.correlationId));
           }
+
+          // Await the consent resolution now that we know the call
+          // has a chance to touch the wire. Resolver is non-throwing
+          // (§8 decisión firmada #8) so no try/catch needed.
+          const consentMode = await consentPromise;
+          const accountingCtx: AccountingCtx = {
+            userId: input.user.userId,
+            origin: input.origin,
+            consentMode,
+            promptHash,
+            traceId,
+          };
 
           if (
             input.user.plan === 'free' ||
             input.user.plan === 'creator'
           ) {
-            return routeByokOnly(input, requiredProvider, provider);
+            return routeByokOnly(
+              input,
+              requiredProvider,
+              provider,
+              accountingCtx,
+            );
           }
-          return routeManagedWithOptionalByok(input, provider);
+          return routeManagedWithOptionalByok(input, provider, accountingCtx);
         },
       );
 
@@ -776,4 +1013,10 @@ export function routingMismatchUserMessage(
 
 function assertNeverModel(x: never): never {
   throw new Error(`No provider mapping for model ${JSON.stringify(x)}`);
+}
+
+function assertNeverErrorKind(x: never): never {
+  throw new Error(
+    `Unhandled LLMCallError kind in shouldRecordError: ${JSON.stringify(x)}`,
+  );
 }

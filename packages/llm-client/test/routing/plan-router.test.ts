@@ -77,6 +77,13 @@ import {
   routingMismatchUserMessage,
 } from '../../src/routing/index.js';
 import { err, ok, type Result } from '../../src/types.js';
+import { hashNormalizedRequest } from '../../src/accounting/index.js';
+import type {
+  ConsentResolver,
+  UsageEntry,
+  UsageRecorder,
+} from '../../src/accounting/index.js';
+import type { ConsentMode } from '../../src/types/repos.js';
 import type {
   ModelId,
   NormalizedLLMRequest,
@@ -269,6 +276,68 @@ function baseRequest(
   };
 }
 
+/**
+ * Iter 7 commit 4: fixed clock for `UsageEntry.occurredAt`. Pinned to
+ * a round epoch so specs can assert the `occurredAt` is preserved
+ * verbatim by the recorder. Tests that care about per-call timing
+ * do their own recording inspection.
+ */
+const TEST_USAGE_CLOCK_MS = 1_700_000_000_000;
+
+/**
+ * Iter 7 commit 4: non-throwing consent fake. Defaults to `'full'` for
+ * all specs that don't care; `enqueue(mode)` pushes a one-shot override
+ * consumed FIFO. `log` captures every userId the router asked about so
+ * specs can assert "consent resolved once per call".
+ */
+class FakeConsentResolver implements ConsentResolver {
+  readonly log: string[] = [];
+  private readonly queue: ConsentMode[] = [];
+  private defaultMode: ConsentMode = 'full';
+
+  setDefault(mode: ConsentMode): this {
+    this.defaultMode = mode;
+    return this;
+  }
+
+  enqueue(mode: ConsentMode): this {
+    this.queue.push(mode);
+    return this;
+  }
+
+  async resolve(userId: string): Promise<ConsentMode> {
+    this.log.push(userId);
+    return this.queue.shift() ?? this.defaultMode;
+  }
+}
+
+/**
+ * Iter 7 commit 4: in-memory recorder fake. `recorded` captures every
+ * entry the router hands us; `flush` + `bufferSize` are no-ops because
+ * the router never calls them.
+ */
+class FakeUsageRecorder implements UsageRecorder {
+  readonly recorded: UsageEntry[] = [];
+
+  async record(entry: UsageEntry): Promise<void> {
+    this.recorded.push(entry);
+  }
+
+  async flush(): Promise<void> {
+    /* no-op */
+  }
+
+  bufferSize(): number {
+    return 0;
+  }
+}
+
+interface BuildRouterExtras {
+  readonly consentResolver?: ConsentResolver;
+  readonly usageRecorder?: UsageRecorder;
+  readonly usageClock?: () => Date;
+}
+
 function buildRouter(
   provider: FakeProvider,
   resolver: FakeResolver,
@@ -278,6 +347,7 @@ function buildRouter(
     readonly userId: string;
     readonly provider: ProviderName;
   }) => void,
+  extras: BuildRouterExtras = {},
 ): PlanRouter {
   return createPlanRouter({
     providers: registryFor(provider),
@@ -285,6 +355,9 @@ function buildRouter(
     breaker,
     flags: flags(),
     metrics,
+    consentResolver: extras.consentResolver ?? new FakeConsentResolver(),
+    usageRecorder: extras.usageRecorder ?? new FakeUsageRecorder(),
+    usageClock: extras.usageClock ?? ((): Date => new Date(TEST_USAGE_CLOCK_MS)),
     ...(onByokKeyInvalidated !== undefined
       ? { onByokKeyInvalidated }
       : {}),
@@ -1088,6 +1161,9 @@ describe('PlanRouter — circuit-breaker integration', () => {
       breaker,
       flags: flags(),
       metrics,
+      consentResolver: new FakeConsentResolver(),
+      usageRecorder: new FakeUsageRecorder(),
+      usageClock: (): Date => new Date(TEST_USAGE_CLOCK_MS),
     });
 
     // Three managed failures in a row — should trip the breaker.
@@ -1268,6 +1344,9 @@ describe('PlanRouter — deployment misconfiguration', () => {
       breaker: closedBreaker(),
       flags: flags(),
       metrics,
+      consentResolver: new FakeConsentResolver(),
+      usageRecorder: new FakeUsageRecorder(),
+      usageClock: (): Date => new Date(TEST_USAGE_CLOCK_MS),
     });
 
     const passedCorrId = 'misconfig-corr-aabbccddeeff0011';
@@ -1610,6 +1689,9 @@ describe('PlanRouter — OTel spans (iter 6 commit 3, §10.1)', () => {
       breaker: closedBreaker(),
       flags: flags(),
       metrics,
+      consentResolver: new FakeConsentResolver(),
+      usageRecorder: new FakeUsageRecorder(),
+      usageClock: (): Date => new Date(TEST_USAGE_CLOCK_MS),
     });
 
     const res = await router.route({
@@ -1748,5 +1830,388 @@ describe('PlanRouter — OTel spans (iter 6 commit 3, §10.1)', () => {
     // No-op tracer does not feed our exporter — the contract is
     // "withSpan / startSpan must not throw without an SDK".
     expect(exporter.getFinishedSpans()).toHaveLength(0);
+  });
+});
+
+// ─── iter 7 commit 4 — accounting wiring (§4.2 matrix) ────────────────
+//
+// One row per wire-touching attempt per the signed matrix. Billable
+// kinds record a 0/0-token row; pre-call rejects record no row. CB
+// deny and router-minted `internal` skip recording because the wire
+// was never touched. A BYOK→Managed fallback emits TWO rows (except
+// when `invalid_key` triggers it — `invalid_key` is never billable).
+
+describe('PlanRouter — iter 7 commit 4 — accounting wiring (§4.2 matrix)', () => {
+  let provider: FakeProvider;
+  let resolver: FakeResolver;
+  let consent: FakeConsentResolver;
+  let usage: FakeUsageRecorder;
+  let metrics: InMemoryMetrics;
+  let exporter: InMemorySpanExporter;
+  let tracerProvider: BasicTracerProvider;
+
+  beforeEach(() => {
+    provider = new FakeProvider('anthropic');
+    resolver = new FakeResolver();
+    consent = new FakeConsentResolver();
+    usage = new FakeUsageRecorder();
+    metrics = new InMemoryMetrics();
+    exporter = new InMemorySpanExporter();
+    tracerProvider = new BasicTracerProvider({
+      spanProcessors: [new SimpleSpanProcessor(exporter)],
+    });
+    setTracer(tracerProvider.getTracer('plan-router-commit4-test'));
+  });
+
+  afterEach(async () => {
+    resetTracer();
+    exporter.reset();
+    await tracerProvider.shutdown();
+  });
+
+  function buildForCommit4(): PlanRouter {
+    return buildRouter(provider, resolver, closedBreaker(), metrics, undefined, {
+      consentResolver: consent,
+      usageRecorder: usage,
+      usageClock: (): Date => new Date(TEST_USAGE_CLOCK_MS),
+    });
+  }
+
+  function expectedPromptHash(request: NormalizedLLMRequest): string {
+    // Mirrors what the router computes — single call to the signed
+    // canonicaliser. If the two drift, this helper flags it.
+    return hashNormalizedRequest(request);
+  }
+
+  it('Free BYOK happy path — 1 row, real tokens, consentMode=full, kekVersion forwarded, promptHash + traceId stamped', async () => {
+    consent.setDefault('full');
+    resolver.enqueueByokSuccess('sk-byok-1', 'anthropic', 7);
+    provider.enqueueSuccess({
+      usage: { inputTokens: 42, outputTokens: 13, totalTokens: 55 },
+    });
+    const router = buildForCommit4();
+
+    const req = baseRequest();
+    const res = await router.route({
+      user: {
+        userId: 'u-c4-1',
+        plan: 'free',
+        llmKeyProvider: 'anthropic',
+        llmKeyStatus: 'active',
+      },
+      request: req,
+      correlationId: DEFAULT_CORR_ID,
+      origin: DEFAULT_ORIGIN,
+    });
+    expect(res.ok).toBe(true);
+
+    expect(usage.recorded).toHaveLength(1);
+    const entry = usage.recorded[0]!;
+    expect(entry.userId).toBe('u-c4-1');
+    expect(entry.provider).toBe('anthropic');
+    expect(entry.model).toBe(req.model);
+    expect(entry.fundingMode).toBe('byok');
+    expect(entry.origin).toBe(DEFAULT_ORIGIN);
+    expect(entry.inputTokens).toBe(42);
+    expect(entry.outputTokens).toBe(13);
+    expect(entry.consentMode).toBe('full');
+    expect(entry.kekVersion).toBe(7);
+    expect(entry.promptHash).toBe(expectedPromptHash(req));
+    expect(entry.promptHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(entry.traceId).toMatch(/^[0-9a-f]{32}$/);
+    expect(entry.occurredAt.getTime()).toBe(TEST_USAGE_CLOCK_MS);
+    expect(typeof entry.latencyMs).toBe('number');
+    expect(entry.latencyMs).toBeGreaterThanOrEqual(0);
+
+    // Consent was consulted exactly once for this userId.
+    expect(consent.log).toEqual(['u-c4-1']);
+  });
+
+  it('Influencer Managed happy path — 1 row, fundingMode=managed, kekVersion strictly absent', async () => {
+    consent.setDefault('full');
+    resolver.enqueueManagedSuccess('sk-managed-1', 'anthropic');
+    provider.enqueueSuccess({
+      usage: { inputTokens: 3, outputTokens: 5, totalTokens: 8 },
+    });
+    const router = buildForCommit4();
+
+    const res = await router.route({
+      user: { userId: 'u-c4-2', plan: 'influencer' },
+      request: baseRequest(),
+      correlationId: DEFAULT_CORR_ID,
+      origin: DEFAULT_ORIGIN,
+    });
+    expect(res.ok).toBe(true);
+
+    expect(usage.recorded).toHaveLength(1);
+    const entry = usage.recorded[0]!;
+    expect(entry.fundingMode).toBe('managed');
+    expect(entry.inputTokens).toBe(3);
+    expect(entry.outputTokens).toBe(5);
+    // kekVersion is STRICTLY absent (not present with undefined value)
+    // — the router branches at build time under exactOptionalPropertyTypes.
+    expect('kekVersion' in entry).toBe(false);
+  });
+
+  it('consentMode=minimal is threaded verbatim (writer layer does redaction)', async () => {
+    consent.setDefault('minimal');
+    resolver.enqueueByokSuccess('sk-min', 'anthropic');
+    provider.enqueueSuccess({
+      usage: { inputTokens: 99, outputTokens: 1, totalTokens: 100 },
+    });
+    const router = buildForCommit4();
+
+    const res = await router.route({
+      user: {
+        userId: 'u-c4-3',
+        plan: 'free',
+        llmKeyProvider: 'anthropic',
+        llmKeyStatus: 'active',
+      },
+      request: baseRequest(),
+      correlationId: DEFAULT_CORR_ID,
+      origin: DEFAULT_ORIGIN,
+    });
+    expect(res.ok).toBe(true);
+
+    expect(usage.recorded).toHaveLength(1);
+    const entry = usage.recorded[0]!;
+    expect(entry.consentMode).toBe('minimal');
+    // Real tokens — the router never redacts; that's the writer's job.
+    expect(entry.inputTokens).toBe(99);
+    expect(entry.outputTokens).toBe(1);
+  });
+
+  it('Free BYOK rate_limit — 1 row, 0/0 tokens, kekVersion still present (wire WAS touched)', async () => {
+    consent.setDefault('full');
+    resolver.enqueueByokSuccess('sk-rl', 'anthropic', 11);
+    provider.enqueueError(make.rateLimit('anthropic'));
+    const router = buildForCommit4();
+
+    const res = await router.route({
+      user: {
+        userId: 'u-c4-4',
+        plan: 'free',
+        llmKeyProvider: 'anthropic',
+        llmKeyStatus: 'active',
+      },
+      request: baseRequest(),
+      correlationId: DEFAULT_CORR_ID,
+      origin: DEFAULT_ORIGIN,
+    });
+    expect(res.ok).toBe(false);
+
+    expect(usage.recorded).toHaveLength(1);
+    const entry = usage.recorded[0]!;
+    expect(entry.inputTokens).toBe(0);
+    expect(entry.outputTokens).toBe(0);
+    expect(entry.fundingMode).toBe('byok');
+    expect(entry.kekVersion).toBe(11);
+  });
+
+  it('Managed provider_down — 1 row, 0/0, fundingMode=managed', async () => {
+    consent.setDefault('full');
+    resolver.enqueueManagedSuccess('sk-down', 'anthropic');
+    provider.enqueueError(make.providerDown('anthropic', false));
+    const router = buildForCommit4();
+
+    const res = await router.route({
+      user: { userId: 'u-c4-5', plan: 'influencer' },
+      request: baseRequest(),
+      correlationId: DEFAULT_CORR_ID,
+      origin: DEFAULT_ORIGIN,
+    });
+    expect(res.ok).toBe(false);
+
+    expect(usage.recorded).toHaveLength(1);
+    const entry = usage.recorded[0]!;
+    expect(entry.inputTokens).toBe(0);
+    expect(entry.outputTokens).toBe(0);
+    expect(entry.fundingMode).toBe('managed');
+    expect('kekVersion' in entry).toBe(false);
+  });
+
+  it('Free BYOK invalid_key — NO row (pre-call reject per §4.2)', async () => {
+    consent.setDefault('full');
+    resolver.enqueueByokSuccess('sk-bad', 'anthropic', 3);
+    provider.enqueueError(make.invalidKey('anthropic'));
+    const router = buildForCommit4();
+
+    const res = await router.route({
+      user: {
+        userId: 'u-c4-6',
+        plan: 'free',
+        llmKeyProvider: 'anthropic',
+        llmKeyStatus: 'active',
+      },
+      request: baseRequest(),
+      correlationId: DEFAULT_CORR_ID,
+      origin: DEFAULT_ORIGIN,
+    });
+    expect(res.ok).toBe(false);
+    // Free/Creator maps invalid_key to plan_requires_key for UI
+    // clarity — either way, invalid_key is NOT billable.
+    expect(usage.recorded).toHaveLength(0);
+  });
+
+  it('plan_requires_key (no key on file) — NO row; resolver + provider never consulted; consent IS resolved (overlap)', async () => {
+    consent.setDefault('full');
+    const router = buildForCommit4();
+
+    const res = await router.route({
+      user: { userId: 'u-c4-7', plan: 'free' },
+      request: baseRequest(),
+      correlationId: DEFAULT_CORR_ID,
+      origin: DEFAULT_ORIGIN,
+    });
+    expect(res.ok).toBe(false);
+
+    expect(usage.recorded).toHaveLength(0);
+    expect(provider.callLog).toHaveLength(0);
+    expect(resolver.log).toHaveLength(0);
+    // Consent WAS resolved — it's kicked off in parallel before the
+    // unregistered-provider short-circuit and awaited after. The
+    // plan_requires_key path is downstream of that await.
+    expect(consent.log).toEqual(['u-c4-7']);
+  });
+
+  it('CB deny — NO row, provider.call never attempted', async () => {
+    consent.setDefault('full');
+    resolver.enqueueByokSuccess('sk-cb', 'anthropic');
+    const router = buildRouter(
+      provider,
+      resolver,
+      openBreaker(),
+      metrics,
+      undefined,
+      {
+        consentResolver: consent,
+        usageRecorder: usage,
+        usageClock: (): Date => new Date(TEST_USAGE_CLOCK_MS),
+      },
+    );
+
+    const res = await router.route({
+      user: {
+        userId: 'u-c4-8',
+        plan: 'free',
+        llmKeyProvider: 'anthropic',
+        llmKeyStatus: 'active',
+      },
+      request: baseRequest(),
+      correlationId: DEFAULT_CORR_ID,
+      origin: DEFAULT_ORIGIN,
+    });
+    expect(res.ok).toBe(false);
+    expect(usage.recorded).toHaveLength(0);
+    expect(provider.callLog).toHaveLength(0);
+  });
+
+  it('Unregistered provider — router-minted internal — NO row', async () => {
+    consent.setDefault('full');
+    const router = createPlanRouter({
+      providers: emptyRegistry(),
+      resolver,
+      breaker: closedBreaker(),
+      flags: flags(),
+      metrics,
+      consentResolver: consent,
+      usageRecorder: usage,
+      usageClock: (): Date => new Date(TEST_USAGE_CLOCK_MS),
+    });
+
+    const res = await router.route({
+      user: { userId: 'u-c4-9', plan: 'influencer' },
+      request: baseRequest(),
+      correlationId: DEFAULT_CORR_ID,
+      origin: DEFAULT_ORIGIN,
+    });
+    expect(res.ok).toBe(false);
+    expect(usage.recorded).toHaveLength(0);
+  });
+
+  it('Fallback: BYOK quota_exhausted + Managed success → 2 rows (BYOK 0/0, Managed real); shared traceId + promptHash + consentMode', async () => {
+    consent.setDefault('full');
+    resolver.enqueueByokSuccess('sk-qe', 'anthropic', 9);
+    provider.enqueueError(make.quotaExhausted('anthropic'));
+    resolver.enqueueManagedSuccess('sk-managed-fb', 'anthropic');
+    provider.enqueueSuccess({
+      usage: { inputTokens: 12, outputTokens: 3, totalTokens: 15 },
+    });
+    const router = buildForCommit4();
+
+    const req = baseRequest();
+    const res = await router.route({
+      user: {
+        userId: 'u-c4-10',
+        plan: 'influencer',
+        llmKeyProvider: 'anthropic',
+        llmKeyStatus: 'active',
+        llmPreferMyKey: true,
+      },
+      request: req,
+      correlationId: DEFAULT_CORR_ID,
+      origin: DEFAULT_ORIGIN,
+    });
+    expect(res.ok).toBe(true);
+
+    expect(usage.recorded).toHaveLength(2);
+    const [byokRow, managedRow] = usage.recorded;
+
+    // BYOK attempt: 0/0 + kekVersion (wire was touched).
+    expect(byokRow ! .fundingMode).toBe('byok');
+    expect(byokRow ! .inputTokens).toBe(0);
+    expect(byokRow ! .outputTokens).toBe(0);
+    expect(byokRow ! .kekVersion).toBe(9);
+
+    // Managed attempt: real tokens, no kekVersion.
+    expect(managedRow ! .fundingMode).toBe('managed');
+    expect(managedRow ! .inputTokens).toBe(12);
+    expect(managedRow ! .outputTokens).toBe(3);
+    expect('kekVersion' in managedRow ! ).toBe(false);
+
+    // Shared identity across both attempts of ONE logical .call().
+    expect(byokRow ! .traceId).toBe(managedRow ! .traceId);
+    expect(byokRow ! .promptHash).toBe(managedRow ! .promptHash);
+    expect(byokRow ! .promptHash).toBe(expectedPromptHash(req));
+    expect(byokRow ! .consentMode).toBe('full');
+    expect(managedRow ! .consentMode).toBe('full');
+
+    // Consent was resolved exactly once for the .call().
+    expect(consent.log).toEqual(['u-c4-10']);
+  });
+
+  it('Fallback: BYOK invalid_key + Managed success → 1 row (Managed only); invalid_key is never billable', async () => {
+    consent.setDefault('full');
+    resolver.enqueueByokSuccess('sk-bad-fb', 'anthropic', 4);
+    provider.enqueueError(make.invalidKey('anthropic'));
+    resolver.enqueueManagedSuccess('sk-managed-rescue', 'anthropic');
+    provider.enqueueSuccess({
+      usage: { inputTokens: 7, outputTokens: 2, totalTokens: 9 },
+    });
+    const router = buildForCommit4();
+
+    const res = await router.route({
+      user: {
+        userId: 'u-c4-11',
+        plan: 'influencer',
+        llmKeyProvider: 'anthropic',
+        llmKeyStatus: 'active',
+        llmPreferMyKey: true,
+      },
+      request: baseRequest(),
+      correlationId: DEFAULT_CORR_ID,
+      origin: DEFAULT_ORIGIN,
+    });
+    expect(res.ok).toBe(true);
+
+    // Only ONE row — the Managed one. BYOK invalid_key is pre-call
+    // per §4.2 even on the fallback path.
+    expect(usage.recorded).toHaveLength(1);
+    const entry = usage.recorded[0]!;
+    expect(entry.fundingMode).toBe('managed');
+    expect(entry.inputTokens).toBe(7);
+    expect(entry.outputTokens).toBe(2);
+    expect('kekVersion' in entry).toBe(false);
   });
 });

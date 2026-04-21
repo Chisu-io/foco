@@ -16,7 +16,7 @@
  *   + `onStateChange`.
  * Iteration 5 scope: audit sink for CB state transitions.
  *   `createCircuitAuditSink(deps)` returns an `OnCircuitStateChange`
- *   that turns §11's two auditable transitions
+ *   that turns §11 two auditable transitions
  *   (`llm.circuit_opened`, `llm.circuit_closed`) into
  *   `SystemAuditEntry` **drafts** and delegates persistence to an
  *   injected `AuditWriter`. `open→half-open` and `half-open→open`
@@ -25,26 +25,43 @@
  *   writer owns the hash chain (id / sequence / prevHash / rowHash);
  *   llm-client stays DB-agnostic.
  * Iteration 6 scope: OTel correlation + deadline propagation.
- * Iteration 7 scope (in progress): token accounting + consent modes.
+ * Iteration 7 scope (closed): token accounting + consent modes.
  *   Commit 1 realigned `OriginKind` to contract §3.3 (5 signed values).
  *   Commit 2 introduced the `ConsentResolver` DI seam +
  *   `UserLLMKeyRepo` interface + `llm_consent_mode_resolved_total`
  *   counter.
- *   Commit 3 (this) adds the `UsageRecorder` writer seam + in-memory
- *   FIFO `UsageBuffer` (capacity 1000, §8 decisión #2) + full
- *   SHA-256-hex `prompt-hash` canonicaliser (§8 decisión #1) +
- *   `llm.accounting.write` sub-span (§5.3) + 4 new metrics
+ *   Commit 3 added the `UsageRecorder` writer seam + in-memory FIFO
+ *   `UsageBuffer` (capacity 1000, §8 decisión #2) + full SHA-256-hex
+ *   `prompt-hash` canonicaliser (§8 decisión #1) +
+ *   `llm.accounting.write` sub-span (§5.3) + 4 accounting metrics
  *   (`llm_accounting_writes_total{consent_mode,funding_mode,result}`,
  *   `llm_accounting_writes_failed_total{reason}`,
  *   `llm_accounting_writes_dropped_total{reason}`,
- *   `llm_accounting_buffer_size`). No router wiring yet — that
- *   lands in commit 4 which plumbs both seams into
- *   `plan-router.route()` per §4.2's billable-vs-pre-call matrix.
- *   See §8 of LLM_CLIENT.md v1.1 and
- *   `.cmsgs/iter7-accounting-design.md`.
+ *   `llm_accounting_buffer_size`).
+ *   Commit 4 wired both seams into `plan-router.route()` per §4.2
+ *   billable-vs-pre-call matrix: every `.call()` that touches the
+ *   wire emits exactly one `UsageEntry`. Recording fires on provider
+ *   success (real tokens) and on billable errors (`rate_limit |
+ *   quota_exhausted | provider_down | content_blocked | network_error
+ *   | internal`, 0/0 tokens). Pre-call errors (`invalid_key |
+ *   context_too_long | kms_unavailable | routing_disabled |
+ *   plan_requires_key`), circuit-breaker denies, and router-minted
+ *   `internal` rejects DO NOT record — the wire was never touched.
+ *   The BYOK→Managed fallback path is two attempts of ONE logical
+ *   `.call()`, so it emits up to two rows sharing `traceId +
+ *   promptHash + consentMode` (one billable BYOK error + one Managed
+ *   success = 2 rows; one `invalid_key` BYOK pre-call + one Managed
+ *   success = 1 row). Consent resolves in parallel with the
+ *   synchronous registry lookup; resolver is non-throwing by contract
+ *   (§8 decisión firmada #8, degrades to `'minimal'`). `latencyMs` is
+ *   per-attempt (`performance.now()` around `provider.call`),
+ *   intentionally distinct from the root span `llm.latency_ms`
+ *   (the `.call()` total). See §4.1 / §4.2 / §5.3 / §8 of
+ *   LLM_CLIENT.md v1.1 and `.cmsgs/iter7-accounting-design.md`.
  *
- * The `LLMClient.call()` surface (orchestrator, latency, idempotency)
- * lands in Iteration 8 of the implementation plan.
+ * The `LLMClient.call()` surface (orchestrator, latency, idempotency,
+ * accounting-flush scheduler) lands in Iteration 8 of the
+ * implementation plan.
  *
  * @see ../../../docs/LLM_CLIENT.md — the signed contract this
  *      package implements (v1.1 SIGNED, 2026-04-18).
