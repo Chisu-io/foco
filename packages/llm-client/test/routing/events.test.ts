@@ -136,30 +136,46 @@ describe('ProviderCallContext — structural shape (iter 6 commit 2)', () => {
   });
 });
 
-describe('OriginKind — structural shape (iter 6 commit 2, §3.3)', () => {
-  it('enumerates exactly the three producer surfaces from §3.3 lines 285–287', () => {
+describe('OriginKind — structural shape (iter 7 commit 1, aligned to §3.3)', () => {
+  it('enumerates exactly the five producer surfaces from §3.3 lines 283–287', () => {
     // Same canary pattern as fundingMode above — the array literal
-    // compiles only while `OriginKind` has precisely these three
+    // compiles only while `OriginKind` has precisely these five
     // members. A new member → compile fails here → code review loops
     // back to the contract.
+    //
+    // iter 7 commit 1 realigns this from the narrowed 3-member version
+    // introduced by iter 6 commit 2 back to the 5 members held by the
+    // signed contract since LLM_CLIENT v1.0.
     const allOrigins: ReadonlyArray<OriginKind> = [
+      'assistant-conversation',
+      'script-generation',
       'caption-refine',
       'hook-brainstorm',
       'mcp-server-callback',
     ] as const;
-    expect(allOrigins).toHaveLength(3);
+    expect(allOrigins).toHaveLength(5);
     expect(new Set(allOrigins)).toEqual(
-      new Set(['caption-refine', 'hook-brainstorm', 'mcp-server-callback']),
+      new Set([
+        'assistant-conversation',
+        'script-generation',
+        'caption-refine',
+        'hook-brainstorm',
+        'mcp-server-callback',
+      ]),
     );
   });
 
-  it('is exhaustive under `switch` — `never` remainder after the three cases', () => {
+  it('is exhaustive under `switch` — `never` remainder after the five cases', () => {
     // Compile-time exhaustiveness: the `never` annotation only holds
-    // while the union stays pinned to three members. Adding a fourth
+    // while the union stays pinned to five members. Adding a sixth
     // without extending the switch would make `fallthrough: OriginKind`
     // narrow to a non-never type and fail to typecheck.
     function label(o: OriginKind): string {
       switch (o) {
+        case 'assistant-conversation':
+          return 'assistant';
+        case 'script-generation':
+          return 'script';
         case 'caption-refine':
           return 'caption';
         case 'hook-brainstorm':
@@ -172,6 +188,8 @@ describe('OriginKind — structural shape (iter 6 commit 2, §3.3)', () => {
         }
       }
     }
+    expect(label('assistant-conversation')).toBe('assistant');
+    expect(label('script-generation')).toBe('script');
     expect(label('caption-refine')).toBe('caption');
     expect(label('hook-brainstorm')).toBe('hook');
     expect(label('mcp-server-callback')).toBe('mcp');

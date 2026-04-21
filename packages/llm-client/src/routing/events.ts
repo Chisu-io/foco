@@ -218,19 +218,36 @@ export type CircuitDecision =
 /**
  * Known producer surfaces that invoke `LLMClient.call()`.
  *
- *  - `caption-refine`       — Foco caption polish pass (UX_FROZEN §2.4).
- *  - `hook-brainstorm`      — opening-hook generation (UX_FROZEN §2.3).
- *  - `mcp-server-callback`  — inbound MCP bi-directional tool callback
- *                             (§3.6 of the MCP subproject).
+ * Verbatim with `LLM_CLIENT.md §3.3` lines 283–287:
+ *
+ *  - `assistant-conversation` — chat with Foco's assistant
+ *                               (UX_FROZEN §2.2).
+ *  - `script-generation`      — video script generation
+ *                               (UX_FROZEN §2.3).
+ *  - `caption-refine`         — Foco caption polish pass
+ *                               (UX_FROZEN §2.4).
+ *  - `hook-brainstorm`        — opening-hook generation
+ *                               (UX_FROZEN §2.3).
+ *  - `mcp-server-callback`    — inbound MCP bi-directional tool
+ *                               callback (§3.6 of the MCP subproject).
  *
  * Extending the union requires a contract amendment (§3.3). A call
  * site that cannot legitimately claim one of these origins has no
  * business calling `LLMClient.call()` — the routing layer cannot
  * attribute cost, audit, or rate-limit against an unknown origin.
  *
+ * History: iter 6 commit 2 introduced this type with only the last
+ * three values, narrowing the signed §3.3 union (a
+ * `feedback_signed_adjustments_no_narrowing` violation that went
+ * unflagged). iter 7 commit 1 realigns it to the five values the
+ * contract has held since v1.0 — this is alignment with a signed
+ * contract, not a widening, and does not require another signature.
+ *
  * @see LLM_CLIENT.md §3.3 — `LLMCallInput.origin`
  */
 export type OriginKind =
+  | 'assistant-conversation'
+  | 'script-generation'
   | 'caption-refine'
   | 'hook-brainstorm'
   | 'mcp-server-callback';
