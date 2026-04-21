@@ -14,7 +14,7 @@
  *   (`invalid_key` | `quota_exhausted` | `rate_limit` |
  *   `network_error`, Ajuste 6 FULL). CB transitions emit to `Metrics`
  *   + `onStateChange`.
- * Iteration 5 scope (this): audit sink for CB state transitions.
+ * Iteration 5 scope: audit sink for CB state transitions.
  *   `createCircuitAuditSink(deps)` returns an `OnCircuitStateChange`
  *   that turns §11's two auditable transitions
  *   (`llm.circuit_opened`, `llm.circuit_closed`) into
@@ -24,9 +24,17 @@
  *   `llm_audit_ignored_transitions_total{from,to}` instead. The
  *   writer owns the hash chain (id / sequence / prevHash / rowHash);
  *   llm-client stays DB-agnostic.
+ * Iteration 6 scope: OTel correlation + deadline propagation.
+ * Iteration 7 scope (in progress): token accounting + consent modes.
+ *   Commit 1 realigned `OriginKind` to contract §3.3 (5 signed values).
+ *   Commit 2 (this) introduces the `ConsentResolver` DI seam +
+ *   `UserLLMKeyRepo` interface + `llm_consent_mode_resolved_total`
+ *   counter. No router wiring yet — that lands in commit 4 after the
+ *   `UsageRecorder` ships in commit 3. See §8 of LLM_CLIENT.md v1.1
+ *   and `.cmsgs/iter7-accounting-design.md`.
  *
  * The `LLMClient.call()` surface (orchestrator, latency, idempotency)
- * lands in Iteration 7 of the implementation plan.
+ * lands in Iteration 8 of the implementation plan.
  *
  * @see ../../../docs/LLM_CLIENT.md — the signed contract this
  *      package implements (v1.1 SIGNED, 2026-04-18).
@@ -39,6 +47,7 @@ export * from './observability/index.js';
 export * from './providers/index.js';
 export * from './http/index.js';
 export * from './routing/index.js';
+export * from './accounting/index.js';
 export type {
   NormalizedContentBlock,
   NormalizedLLMRequest,
@@ -51,5 +60,7 @@ export type {
   PingOutput,
   StopReason,
   UsageCounts,
+  ConsentMode,
+  UserLLMKeyRepo,
 } from './types/index.js';
 export { type Result, ok, err } from './types.js';

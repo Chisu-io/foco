@@ -23,3 +23,5 @@ export type {
   StopReason,
   UsageCounts,
 } from './response.js';
+
+export type { ConsentMode, UserLLMKeyRepo } from './repos.js';

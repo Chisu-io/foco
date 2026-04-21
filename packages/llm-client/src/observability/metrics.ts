@@ -1,16 +1,18 @@
 /**
- * Minimal metrics interface used by the crypto layer.
+ * Minimal metrics interface used across all `llm-client` layers.
  *
- * Iteration 2 ships only the abstraction + an in-memory implementation
+ * Iteration 2 shipped only the abstraction + an in-memory implementation
  * for tests. Iteration 6 wires this to Mimir via OpenTelemetry, per
  * {@link ../../../../docs/LLM_CLIENT.md `LLM_CLIENT.md` §10.2}.
  *
- * Keeping the interface narrow avoids leaking OTel types into the
- * crypto layer and keeps call sites test-hermetic (no side channels
- * into a global metrics registry).
+ * Keeping the interface narrow avoids leaking OTel types into each
+ * layer and keeps call sites test-hermetic (no side channels into a
+ * global metrics registry).
  *
- * Metric names emitted by the crypto layer:
+ * Metric names emitted, grouped by layer (non-exhaustive — see each
+ * module's header for the authoritative list):
  *
+ * Crypto (iter 2) ————————————————————————————————————————————
  *   llm_kms_latency_ms{operation=encrypt|decrypt}                histogram
  *   llm_kms_induced_failures_total{operation, transient}         counter
  *   llm_kms_retries_total{operation, outcome=success|fail}       counter
@@ -19,8 +21,27 @@
  *   llm_dek_cache_hits_total{}                                   counter
  *   llm_dek_cache_misses_total{}                                 counter
  *   llm_dek_cache_stale_hits_total{reason=version_mismatch}      counter
- *   llm_dek_cache_evictions_total{reason=ttl|manual}             counter
+ *   llm_dek_cache_evictions_total{reason=ttl|manual|stale}       counter
  *   llm_kek_shard_distribution{kek_version, shard_id}            gauge
+ *
+ * Routing / circuit-breaker (iter 4/5) ——————————————————————————
+ *   llm_circuit_state{provider}                                  gauge
+ *   llm_circuit_transitions_total{provider,from,to}              counter
+ *   llm_audit_ignored_transitions_total{from,to}                 counter
+ *
+ * Accounting (iter 7) ————————————————————————————————————————
+ *   llm_consent_mode_resolved_total{mode, source}                counter
+ *      mode ∈ {full,minimal}
+ *      source ∈ {cache,repo,default_on_failure}
+ *
+ *   More accounting metrics (`llm_accounting_writes_total`,
+ *   `llm_accounting_writes_failed_total`,
+ *   `llm_accounting_writes_dropped_total`,
+ *   `llm_accounting_buffer_size`) land in iter 7 commit 3.
+ *
+ * Non-PII invariant (§10.2 + §5.2 of the accounting design doc):
+ * dimensions on every metric MUST be categorical. Never `user_id`,
+ * never `prompt_hash`, never `trace_id`, never `api_key` or ciphertext.
  */
 
 /**
