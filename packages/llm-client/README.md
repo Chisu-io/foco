@@ -269,6 +269,52 @@ sub-span) lands in iter 6 commits 3 and 4. The `llm.accounting.write`
 sub-span ships with iter 7 token accounting. Cross-process baggage
 propagation is deferred per §8 of the iter 6 mini-spec.
 
+### correlationId + trace headers (iter 6 commit 2)
+
+Commit 2 threads a **caller-supplied `correlationId: string`** from
+the routing API down to the outbound HTTP request. Three invariants
+apply:
+
+1. **Single identity, no minting on the happy path.** The caller
+   supplies `correlationId` on every `router.route({...})`; the
+   router passes it verbatim to the provider adapter; the adapter
+   stamps it on the wire. If the router ever needs to surface an
+   `internal` error (e.g. misconfigured registry), it reuses
+   `input.correlationId` — **no `randomBytes` fallback**. This keeps
+   the root span (iter 6 commit 3, `llm.client.call`), the provider
+   sub-span, the audit log, and any upstream caller log on the same
+   id — dashboards stay stitchable without post-processing joins.
+
+2. **Two types, one field crosses the boundary.**
+   `ProviderCallContext` (in `src/routing/events.ts`) is the
+   **routing-internal** shape: `correlationId`, optional `deadline`
+   (Unix ms, NOT a duration), optional `idempotencyKey`, plus
+   `fundingMode: 'byok' | 'managed'` and
+   `origin: OriginKind`. `ProviderCallInput` (in
+   `src/providers/provider.ts`) is the **adapter-facing** shape:
+   only `correlationId` crosses over. Adapters are intentionally
+   kept ignorant of `fundingMode` (whether a key came from BYOK or
+   the Managed pool is an accounting concern, not a transport one)
+   and of `idempotencyKey` (the router hashes it for telemetry).
+
+3. **Header conventions are provider-specific.** The adapter emits
+   the provider's native trace header — nothing generic:
+
+   | Provider  | Outbound header       | Where it flows |
+   | --------- | --------------------- | -------------- |
+   | Anthropic | `anthropic-trace-id`  | Messages API   |
+   | OpenAI    | `X-Request-ID`        | Chat Completions |
+   | Gemini    | *(none)*              | AI Studio — no standard header. The id still lands in the local span + audit. |
+
+   `ping()` is a health probe and does NOT emit the header — we do
+   not want ping traffic polluting per-correlation dashboards.
+
+`OriginKind` is a closed three-member union from §3.3 of
+`LLM_CLIENT.md v1.1` (`caption-refine` | `hook-brainstorm` |
+`mcp-server-callback`). Adding a fourth producer surface requires a
+signed amendment — the `test/routing/events.test.ts` exhaustiveness
+canary will fail to compile otherwise.
+
 ### Facade `correlationId` policy (iter 8 upcoming)
 
 Internal APIs introduced in iter 6 commits 2+ require

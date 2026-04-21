@@ -35,6 +35,12 @@ import type { NormalizedLLMRequest } from '../../src/types/request.js';
 import { fakeHttp, jsonResponse, neverTimeout, throwTransport } from './_fake-http.js';
 
 const KEY = 'AIzaSyTESTKEY';
+// Iter 6 commit 2 (P11): every `provider.call` now requires a
+// `correlationId`. Tests share one sentinel so we can assert that
+// Gemini — unlike Anthropic / OpenAI — does NOT emit any trace
+// header (no standard `x-google-trace-id` equivalent; see
+// `src/providers/gemini.ts` JSDoc).
+const CORR_ID = 'corr-gemini-test-0001';
 
 function req(
   overrides: Partial<NormalizedLLMRequest> = {},
@@ -76,7 +82,7 @@ describe('gemini.call — outbound wire format', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    await provider.call({ apiKey: KEY, request: req() });
+    await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(http.received[0]!.method).toBe('POST');
     expect(http.received[0]!.url).toBe(
       `${GEMINI_ENDPOINT_BASE}/gemini-2.5-flash:generateContent`,
@@ -89,7 +95,7 @@ describe('gemini.call — outbound wire format', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    await provider.call({ apiKey: KEY, request: req() });
+    await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     const sent = http.received[0]!;
     expect(sent.headers['x-goog-api-key']).toBe(KEY);
     expect(sent.url).not.toContain(KEY);
@@ -104,6 +110,7 @@ describe('gemini.call — outbound wire format', () => {
     });
     await provider.call({
       apiKey: KEY,
+      correlationId: CORR_ID,
       request: req({ systemPrompt: 'be concise' }),
     });
     const body = JSON.parse(http.received[0]!.body ?? '{}');
@@ -122,6 +129,7 @@ describe('gemini.call — outbound wire format', () => {
     });
     await provider.call({
       apiKey: KEY,
+      correlationId: CORR_ID,
       request: req({
         temperature: 0.3,
         stopSequences: ['STOP'],
@@ -145,6 +153,7 @@ describe('gemini.call — outbound wire format', () => {
     });
     await provider.call({
       apiKey: KEY,
+      correlationId: CORR_ID,
       request: req({
         messages: [
           { role: 'user', content: 'q?' },
@@ -167,6 +176,7 @@ describe('gemini.call — outbound wire format', () => {
     });
     await provider.call({
       apiKey: KEY,
+      correlationId: CORR_ID,
       request: req({
         messages: [
           {
@@ -196,6 +206,7 @@ describe('gemini.call — outbound wire format', () => {
     });
     await provider.call({
       apiKey: KEY,
+      correlationId: CORR_ID,
       request: req({
         toolDefinitions: [
           { name: 'lookup', description: 'look', parameters: { type: 'object' } },
@@ -222,7 +233,7 @@ describe('gemini.call — inbound response parsing', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     expect(res.value.providerUsed).toBe('gemini');
@@ -253,7 +264,7 @@ describe('gemini.call — inbound response parsing', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     expect(res.value.stopReason).toBe('max_tokens');
@@ -286,7 +297,7 @@ describe('gemini.call — inbound response parsing', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     // §9.3: Gemini lacks a tool_use finishReason — adapter upgrades.
@@ -315,7 +326,7 @@ describe('gemini.call — inbound response parsing', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error).toEqual({ kind: 'content_blocked', reason: 'safety' });
@@ -338,7 +349,7 @@ describe('gemini.call — inbound response parsing', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error).toEqual({ kind: 'content_blocked', reason: 'safety' });
@@ -354,7 +365,7 @@ describe('gemini.call — inbound response parsing', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error).toEqual({ kind: 'content_blocked', reason: 'safety' });
@@ -376,7 +387,7 @@ describe('gemini.call — error mapping (§7.1)', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: 'bad', request: req() });
+    const res = await provider.call({ apiKey: 'bad', request: req(), correlationId: CORR_ID });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error.kind).toBe('invalid_key');
@@ -392,7 +403,7 @@ describe('gemini.call — error mapping (§7.1)', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error.kind).toBe('invalid_key');
@@ -412,7 +423,7 @@ describe('gemini.call — error mapping (§7.1)', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error.kind).toBe('quota_exhausted');
@@ -432,7 +443,7 @@ describe('gemini.call — error mapping (§7.1)', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error.kind).toBe('invalid_key');
@@ -452,7 +463,7 @@ describe('gemini.call — error mapping (§7.1)', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error.kind).toBe('quota_exhausted');
@@ -476,7 +487,7 @@ describe('gemini.call — error mapping (§7.1)', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error).toMatchObject({ kind: 'rate_limit', retryAfterSec: 30 });
@@ -496,7 +507,7 @@ describe('gemini.call — error mapping (§7.1)', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error.kind).toBe('context_too_long');
@@ -510,7 +521,7 @@ describe('gemini.call — error mapping (§7.1)', () => {
         http: http.fn,
         timeoutSignal: neverTimeout,
       });
-      const res = await provider.call({ apiKey: KEY, request: req() });
+      const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
       expect(res.ok).toBe(false);
       if (res.ok) return;
       expect(res.error.kind).toBe('provider_down');
@@ -523,7 +534,7 @@ describe('gemini.call — error mapping (§7.1)', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error).toEqual({ kind: 'network_error', transient: true });
@@ -609,6 +620,7 @@ describe('gemini — outbound parts conversion edges', () => {
     });
     await provider.call({
       apiKey: KEY,
+      correlationId: CORR_ID,
       request: req({
         messages: [
           {
@@ -633,6 +645,7 @@ describe('gemini — outbound parts conversion edges', () => {
     });
     await provider.call({
       apiKey: KEY,
+      correlationId: CORR_ID,
       request: req({
         messages: [
           {
@@ -656,6 +669,7 @@ describe('gemini — outbound parts conversion edges', () => {
     });
     await provider.call({
       apiKey: KEY,
+      correlationId: CORR_ID,
       request: req({
         messages: [
           { role: 'user', content: '' },
@@ -675,6 +689,7 @@ describe('gemini — outbound parts conversion edges', () => {
     });
     await provider.call({
       apiKey: KEY,
+      correlationId: CORR_ID,
       request: req({
         messages: [
           {
@@ -708,7 +723,7 @@ describe('gemini — inbound edges', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(true);
   });
 
@@ -723,7 +738,7 @@ describe('gemini — inbound edges', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(true);
   });
 
@@ -742,7 +757,7 @@ describe('gemini — inbound edges', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error.kind).toBe('provider_down');
@@ -758,7 +773,7 @@ describe('gemini — inbound edges', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error.kind).toBe('provider_down');
@@ -776,7 +791,7 @@ describe('gemini — inbound edges', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     expect(res.value.modelUsed).toBe('gemini-2.5-flash');
@@ -788,7 +803,7 @@ describe('gemini — inbound edges', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     expect(res.value.providerRequestId).toBeUndefined();
@@ -802,7 +817,7 @@ describe('gemini — inbound edges', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     expect(res.value.providerRequestId).toBe('fallback-id');
@@ -819,7 +834,7 @@ describe('gemini — inbound edges', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     expect(res.value.usage).toEqual({
@@ -848,7 +863,7 @@ describe('gemini — inbound edges', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     expect(res.value.stopReason).toBe('tool_use');
@@ -870,7 +885,7 @@ describe('gemini — inbound edges', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     expect(res.value.stopReason).toBe('end_turn');
@@ -898,7 +913,7 @@ describe('gemini — inbound edges', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     expect(res.value.message.content).toEqual([{ type: 'text', text: 'saved' }]);
@@ -916,7 +931,7 @@ describe('gemini — error mapping extra keyword paths', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error.kind).toBe('provider_down');
@@ -932,7 +947,7 @@ describe('gemini — error mapping extra keyword paths', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error.kind).toBe('invalid_key');
@@ -952,7 +967,7 @@ describe('gemini — error mapping extra keyword paths', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error.kind).toBe('quota_exhausted');
@@ -972,7 +987,7 @@ describe('gemini — error mapping extra keyword paths', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error.kind).toBe('quota_exhausted');
@@ -992,7 +1007,7 @@ describe('gemini — error mapping extra keyword paths', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error.kind).toBe('quota_exhausted');
@@ -1012,7 +1027,7 @@ describe('gemini — error mapping extra keyword paths', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error.kind).toBe('quota_exhausted');
@@ -1032,7 +1047,7 @@ describe('gemini — error mapping extra keyword paths', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error.kind).toBe('quota_exhausted');
@@ -1052,7 +1067,7 @@ describe('gemini — error mapping extra keyword paths', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error.kind).toBe('quota_exhausted');
@@ -1072,7 +1087,7 @@ describe('gemini — error mapping extra keyword paths', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error.kind).toBe('context_too_long');
@@ -1092,7 +1107,7 @@ describe('gemini — error mapping extra keyword paths', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error.kind).toBe('context_too_long');
@@ -1112,7 +1127,7 @@ describe('gemini — error mapping extra keyword paths', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error.kind).toBe('context_too_long');
@@ -1132,7 +1147,7 @@ describe('gemini — error mapping extra keyword paths', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error.kind).toBe('context_too_long');
@@ -1152,7 +1167,7 @@ describe('gemini — error mapping extra keyword paths', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error).toEqual({ kind: 'content_blocked', reason: 'safety' });
@@ -1172,7 +1187,7 @@ describe('gemini — error mapping extra keyword paths', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error).toEqual({ kind: 'content_blocked', reason: 'safety' });
@@ -1192,7 +1207,7 @@ describe('gemini — error mapping extra keyword paths', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error).toEqual({ kind: 'content_blocked', reason: 'safety' });
@@ -1212,7 +1227,7 @@ describe('gemini — error mapping extra keyword paths', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error).toEqual({ kind: 'content_blocked', reason: 'safety' });
@@ -1230,7 +1245,7 @@ describe('gemini — retry-after parsing', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error).toMatchObject({ kind: 'rate_limit', retryAfterSec: 7 });
@@ -1247,7 +1262,7 @@ describe('gemini — retry-after parsing', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     if (res.error.kind !== 'rate_limit') throw new Error('expected rate_limit');
@@ -1265,7 +1280,7 @@ describe('gemini — retry-after parsing', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error).toMatchObject({ kind: 'rate_limit', retryAfterSec: 0 });
@@ -1281,7 +1296,7 @@ describe('gemini — retry-after parsing', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     if (res.error.kind !== 'rate_limit') throw new Error('expected rate_limit');
@@ -1298,7 +1313,7 @@ describe('gemini — transport + signal composition edges', () => {
       http: fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error.kind).toBe('internal');
@@ -1311,7 +1326,7 @@ describe('gemini — transport + signal composition edges', () => {
       endpointBase: 'https://example.test/v1beta/models/',
       timeoutSignal: neverTimeout,
     });
-    await provider.call({ apiKey: KEY, request: req() });
+    await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(http.received[0]!.url).toBe(
       'https://example.test/v1beta/models/gemini-2.5-flash:generateContent',
     );
@@ -1336,6 +1351,7 @@ describe('gemini — transport + signal composition edges', () => {
       const ctrl = new AbortController();
       await provider.call({
         apiKey: KEY,
+        correlationId: CORR_ID,
         request: req(),
         abortSignal: ctrl.signal,
       });
@@ -1352,10 +1368,65 @@ describe('gemini — transport + signal composition edges', () => {
       ctrl.abort();
       await provider.call({
         apiKey: KEY,
+        correlationId: CORR_ID,
         request: req(),
         abortSignal: ctrl.signal,
       });
       expect(http.received[0]!.signal?.aborted).toBe(true);
     });
+  });
+});
+
+describe('gemini — correlationId header plumbing (iter 6 commit 2)', () => {
+  it('does NOT emit any trace header on call() — Gemini has no standard equivalent', async () => {
+    const http = fakeHttp(jsonResponse(200, successBody()));
+    const provider = createGeminiProvider({
+      http: http.fn,
+      timeoutSignal: neverTimeout,
+    });
+    await provider.call({
+      apiKey: KEY,
+      correlationId: 'corr-gemini-trace-stamped-XYZ',
+      request: req(),
+    });
+
+    const sent = http.received[0]!;
+    // Anthropic and OpenAI both have documented client-trace headers
+    // (`anthropic-trace-id`, `X-Request-ID`); the Gemini AI Studio
+    // surface does not. Asserting the absence of the two known
+    // sibling headers is the strictest invariant we can keep without
+    // pinning ourselves to an implementation choice that Google may
+    // later publish.
+    expect(
+      Object.prototype.hasOwnProperty.call(sent.headers, 'anthropic-trace-id'),
+    ).toBe(false);
+    expect(
+      Object.prototype.hasOwnProperty.call(sent.headers, 'X-Request-ID'),
+    ).toBe(false);
+    expect(
+      Object.prototype.hasOwnProperty.call(sent.headers, 'x-request-id'),
+    ).toBe(false);
+    // The id must also stay out of the URL + body — the JSDoc on the
+    // adapter promises "no header emission, no echo anywhere".
+    expect(sent.url).not.toContain('corr-gemini-trace-stamped-XYZ');
+    expect(sent.body ?? '').not.toContain('corr-gemini-trace-stamped-XYZ');
+  });
+
+  it('ping() also emits no trace header', async () => {
+    const http = fakeHttp(jsonResponse(200, successBody()));
+    const provider = createGeminiProvider({
+      http: http.fn,
+      timeoutSignal: neverTimeout,
+    });
+    const res = await provider.ping({ apiKey: KEY });
+    expect(res.ok).toBe(true);
+
+    const sent = http.received[0]!;
+    expect(
+      Object.prototype.hasOwnProperty.call(sent.headers, 'anthropic-trace-id'),
+    ).toBe(false);
+    expect(
+      Object.prototype.hasOwnProperty.call(sent.headers, 'X-Request-ID'),
+    ).toBe(false);
   });
 });

@@ -115,7 +115,7 @@ async function openAICall(
     response = await deps.http({
       method: 'POST',
       url: deps.endpoint,
-      headers: authHeaders(input.apiKey),
+      headers: authHeaders(input.apiKey, input.correlationId),
       body: JSON.stringify(body),
       signal,
     });
@@ -149,7 +149,10 @@ async function openAIPing(
     response = await deps.http({
       method: 'POST',
       url: deps.endpoint,
-      headers: authHeaders(input.apiKey),
+      // Ping uses `ProviderPingInput`, which carries no correlation
+      // id — pings run outside the router's call chain. Pass
+      // `undefined` so `authHeaders` omits `X-Request-ID`.
+      headers: authHeaders(input.apiKey, undefined),
       body: JSON.stringify(body),
       signal,
     });
@@ -174,11 +177,41 @@ async function openAIPing(
 
 // ─── Outbound wire format ────────────────────────────────────────────
 
-function authHeaders(apiKey: string): Readonly<Record<string, string>> {
-  return Object.freeze({
+/**
+ * Build OpenAI auth headers.
+ *
+ * `correlationId` is threaded from `ProviderCallInput.correlationId`
+ * (iter 6 commit 2). When present, it travels as `X-Request-ID` —
+ * OpenAI's documented client-supplied request identifier. If we don't
+ * supply one, OpenAI generates its own and returns it in the
+ * `x-request-id` response header; supplying ours instead means our
+ * correlation id appears in OpenAI's request logs alongside ours.
+ *
+ * `ping` passes `undefined` — pings run outside the router's call
+ * chain so there is no correlation id to stamp.
+ *
+ * @see docs/LLM_CLIENT.md §9.2
+ * @see .cmsgs/iter6-otel-correlation-design.md §3 (commit 2 scope)
+ */
+function authHeaders(
+  apiKey: string,
+  correlationId: string | undefined,
+): Readonly<Record<string, string>> {
+  const base = {
     'content-type': 'application/json',
     accept: 'application/json',
     authorization: `Bearer ${apiKey}`,
+  };
+  if (correlationId === undefined) {
+    return Object.freeze(base);
+  }
+  return Object.freeze({
+    ...base,
+    // OpenAI accepts `X-Request-ID` (capital-X header is canonical in
+    // their docs). The wire is case-insensitive but lowercase + the
+    // canonical caps form are both common; we send the canonical caps
+    // form to match the docs and to be deterministic for tests.
+    'X-Request-ID': correlationId,
   });
 }
 

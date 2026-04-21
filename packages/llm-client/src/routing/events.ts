@@ -203,6 +203,99 @@ export type CircuitDecision =
   | 'deny_open'
   | 'deny_probes_exhausted';
 
+// ─── Request origin + routing-layer call context ────────────────────
+//
+// Both types are net-new in iter 6 commit 2. They formalise the
+// "who is calling, with what trace identity, and under what deadline"
+// context that flows from `LLMClient.call()` (iter 7) down through the
+// plan router and into each provider adapter.
+//
+// §3.3 of the signed contract lists the public `LLMCallInput.origin`
+// values — see lines 285–287. The union here stays verbatim with that
+// list; widening it forces a contract re-signature per the three-
+// contracts rule.
+
+/**
+ * Known producer surfaces that invoke `LLMClient.call()`.
+ *
+ *  - `caption-refine`       — Foco caption polish pass (UX_FROZEN §2.4).
+ *  - `hook-brainstorm`      — opening-hook generation (UX_FROZEN §2.3).
+ *  - `mcp-server-callback`  — inbound MCP bi-directional tool callback
+ *                             (§3.6 of the MCP subproject).
+ *
+ * Extending the union requires a contract amendment (§3.3). A call
+ * site that cannot legitimately claim one of these origins has no
+ * business calling `LLMClient.call()` — the routing layer cannot
+ * attribute cost, audit, or rate-limit against an unknown origin.
+ *
+ * @see LLM_CLIENT.md §3.3 — `LLMCallInput.origin`
+ */
+export type OriginKind =
+  | 'caption-refine'
+  | 'hook-brainstorm'
+  | 'mcp-server-callback';
+
+/**
+ * Routing-layer context threaded from `LLMClient.call()` through the
+ * plan router and into each provider adapter.
+ *
+ * This is the **routing-internal** shape. Adapters receive a tighter
+ * slice of it (`ProviderCallInput` in `../providers/provider.ts`) —
+ * specifically, only `correlationId` crosses the adapter boundary.
+ * `fundingMode` is a routing concern (the adapter does not know
+ * whether the key came from BYOK or the Managed pool), `origin` is a
+ * caller-facing attribution label, and `deadline` + `idempotencyKey`
+ * are plumbing the router owns.
+ *
+ * Commit 2 (this commit) only **defines** the shape so downstream
+ * iterations can thread it:
+ *
+ *  - Commit 3 consumes it in the router's root span + provider sub-span
+ *    (span attributes include `funding_mode`, `origin`, hashed
+ *    `idempotency_key`).
+ *  - Commit 5 consumes `deadline` to compute the per-call timeout
+ *    budget + forward it as `AbortSignal.timeout(remaining)`.
+ *
+ * Invariants:
+ *  1. `correlationId` is the SAME identity used for:
+ *     - `LLMCallError.internal.correlationId` when the router mints
+ *       an `internal` error (no more ad-hoc `newCorrelationId()` per
+ *       call site).
+ *     - the OTel root span (`Trace.setSpan`, iter 6 commit 3).
+ *     - outbound provider trace headers (`anthropic-trace-id`,
+ *       `X-Request-ID` — commit 2 wires these).
+ *  2. `idempotencyKey`, if set, MUST NOT leak into logs or span
+ *     attributes raw. Adapters/tracers MUST hash via
+ *     `hashIdempotencyKey()` (iter 6 commit 1).
+ *  3. `deadline` is a Unix epoch in milliseconds, NOT a duration.
+ *     A missing deadline means "no external deadline"; each adapter
+ *     still enforces its own per-call timeout.
+ */
+export interface ProviderCallContext {
+  /** Trace / correlation ID — flows into spans, logs, and trace headers. */
+  readonly correlationId: string;
+  /**
+   * Absolute deadline as a Unix epoch millisecond timestamp, NOT a
+   * duration. Commit 5 converts this into a remaining-budget
+   * `AbortSignal.timeout(...)`.
+   */
+  readonly deadline?: number | undefined;
+  /**
+   * Caller-supplied idempotency key. Echoed into telemetry as a
+   * **hashed** label (never raw) per `hashIdempotencyKey` in
+   * `../observability/tracing.ts` (iter 6 commit 1).
+   */
+  readonly idempotencyKey?: string | undefined;
+  /**
+   * Funding mode resolved by the router. Analytics/audit only — the
+   * adapter does not receive this because a correctly-written adapter
+   * treats BYOK and Managed keys identically.
+   */
+  readonly fundingMode: 'byok' | 'managed';
+  /** Producer surface that invoked `LLMClient.call()`. See {@link OriginKind}. */
+  readonly origin: OriginKind;
+}
+
 // ─── Exhaustiveness helpers ───────────────────────────────────────────
 //
 // `assertNever` in `errors/taxonomy.ts` is a *throwing* helper used in

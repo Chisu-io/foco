@@ -45,8 +45,6 @@
  *    provider map leaves no routing degree of freedom to respect it.
  */
 
-import { randomBytes } from 'node:crypto';
-
 import type { FlagsReader } from '../config/flag-reader.js';
 import { make, type LLMCallError } from '../errors/taxonomy.js';
 import type { Metrics } from '../observability/metrics.js';
@@ -55,7 +53,7 @@ import { type Result, err, ok } from '../types.js';
 import type { ModelId, NormalizedLLMRequest } from '../types/request.js';
 import type { ProviderCallOutput } from '../types/response.js';
 import type { CircuitBreaker } from './circuit-breaker.js';
-import { classifyOutcomeForBreaker } from './events.js';
+import { classifyOutcomeForBreaker, type OriginKind } from './events.js';
 
 /**
  * Plan tiers in Foco. Kept as a local literal so this module does
@@ -181,12 +179,44 @@ export interface PlanRouterDeps {
   readonly now?: (() => number) | undefined;
 }
 
-/** Full input to `PlanRouter.route` (§3.3 minus keys). */
+/**
+ * Full input to `PlanRouter.route` (§3.3 minus keys).
+ *
+ * **Iter 6 commit 2 additions (P1, P10, commit-2 design §3):**
+ *
+ *  - `correlationId` (required) — identity threaded into every outbound
+ *    trace header (Anthropic `anthropic-trace-id`, OpenAI
+ *    `X-Request-ID`; Gemini omits) and into the `internal` error
+ *    minted when a supported model maps to an unregistered provider
+ *    (P10 — no more ad-hoc `newCorrelationId()` per call site). Iter 6
+ *    commit 3 will also use it to open the router's root span.
+ *  - `origin` (required) — producer-surface label that flows into
+ *    span attributes + audit without leaking request content. Must be
+ *    one of the {@link OriginKind} literals.
+ *
+ *  Note on `deadline` + `idempotencyKey`: both live on
+ *  `ProviderCallContext` (see `./events.ts`) and are populated by
+ *  `LLMClient.call()` in iter 7. They do **not** yet appear on
+ *  `RouteInput` because commit 2 only threads correlation id through
+ *  the wire; deadline propagation is commit 5's scope.
+ */
 export interface RouteInput {
   readonly user: UserQuota;
   readonly request: NormalizedLLMRequest;
   readonly providerHint?: ProviderName | undefined;
   readonly abortSignal?: AbortSignal | undefined;
+  /**
+   * Trace / correlation id minted by `LLMClient.call()` (iter 7) or
+   * supplied by the caller. Required — there is no routing path that
+   * should run without an identity.
+   */
+  readonly correlationId: string;
+  /**
+   * Producer surface invoking the router. Flows into span attributes
+   * + audit logs. Required — every Foco call path knows which
+   * surface it is.
+   */
+  readonly origin: OriginKind;
 }
 
 /**
@@ -270,6 +300,7 @@ export function createPlanRouter(deps: PlanRouterDeps): PlanRouter {
     provider: Provider,
     request: NormalizedLLMRequest,
     abortSignal: AbortSignal | undefined,
+    correlationId: string,
   ): Promise<Result<RouterCallOutput, LLMCallError>> {
     const decision = breaker.isCallAllowed(provider.name);
     if (decision === 'deny_open' || decision === 'deny_probes_exhausted') {
@@ -280,9 +311,15 @@ export function createPlanRouter(deps: PlanRouterDeps): PlanRouter {
       return err(make.providerDown(provider.name, true));
     }
 
+    // Iter 6 commit 2 (P1, P11): `correlationId` is threaded into the
+    // adapter so Anthropic + OpenAI can stamp their trace header. See
+    // `provider.ts` → `ProviderCallInput.correlationId`. The breaker
+    // call above does NOT receive it — breaker state is provider-wide
+    // and correlation-agnostic by design (iter 4 invariant).
     const callResult = await provider.call({
       apiKey: resolved.apiKey,
       request,
+      correlationId,
       ...(abortSignal !== undefined ? { abortSignal } : {}),
     });
 
@@ -373,6 +410,7 @@ export function createPlanRouter(deps: PlanRouterDeps): PlanRouter {
       provider,
       request,
       input.abortSignal,
+      input.correlationId,
     );
 
     metrics.counter(ROUTER_METRIC_NAMES.requests, {
@@ -446,6 +484,7 @@ export function createPlanRouter(deps: PlanRouterDeps): PlanRouter {
           provider,
           request,
           input.abortSignal,
+          input.correlationId,
         );
         if (byokOutcome.ok) {
           metrics.counter(ROUTER_METRIC_NAMES.requests, {
@@ -530,6 +569,7 @@ export function createPlanRouter(deps: PlanRouterDeps): PlanRouter {
       provider,
       request,
       input.abortSignal,
+      input.correlationId,
     );
 
     metrics.counter(ROUTER_METRIC_NAMES.requests, {
@@ -549,9 +589,13 @@ export function createPlanRouter(deps: PlanRouterDeps): PlanRouter {
     const provider = providers.get(requiredProvider);
     if (provider === undefined) {
       // Deployment misconfiguration — a supported model maps to an
-      // unconfigured provider. Mint `internal` with a correlation
-      // id the UI can surface to support.
-      return err(make.internal(newCorrelationId()));
+      // unconfigured provider. Surface `internal` with the caller's
+      // correlation id (P10 of iter 6 commit 2 design): we no longer
+      // mint a fresh id here, because the client already owns the
+      // identity for this call and downstream observers (OTel root
+      // span, audit log) must be able to stitch this error back to
+      // the same request.
+      return err(make.internal(input.correlationId));
     }
 
     if (input.user.plan === 'free' || input.user.plan === 'creator') {
@@ -576,19 +620,6 @@ export function routingMismatchUserMessage(
   currentProvider: ProviderName,
 ): string {
   return mismatchMessage(requiredProvider, currentProvider);
-}
-
-/**
- * Correlation-id minter. 8 random bytes from `node:crypto` rendered
- * as hex — correlation ids are for customer-support grep, not
- * security, but using CSPRNG bytes is cheaper than a thinking
- * moment about collision probabilities.
- *
- * Iter 6 will replace this with an OTel span id once the tracer is
- * wired up.
- */
-function newCorrelationId(): string {
-  return randomBytes(8).toString('hex');
 }
 
 function assertNeverModel(x: never): never {

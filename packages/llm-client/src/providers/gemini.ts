@@ -138,6 +138,17 @@ async function geminiCall(
     input.abortSignal,
   );
 
+  // Iter 6 commit 2 (P11): `input.correlationId` is REQUIRED on
+  // `ProviderCallInput` for every adapter, but Gemini intentionally
+  // does NOT emit a trace header. Google AI Studio's
+  // generateContent endpoint has no documented client-supplied
+  // request-id header — sending an unspecified one risks leaking
+  // into access logs in a way that downstream tooling cannot
+  // interpret. The router/orchestrator still uses the correlation
+  // id for the provider sub-span (iter 6 commit 3) and for any
+  // `internal` error minted on this call path.
+  void input.correlationId;
+
   let response;
   try {
     response = await deps.http({

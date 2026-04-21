@@ -32,6 +32,11 @@ import type { NormalizedLLMRequest } from '../../src/types/request.js';
 import { fakeHttp, jsonResponse, neverTimeout, throwTransport } from './_fake-http.js';
 
 const KEY = 'sk-ant-test-KEYSEC';
+// Iter 6 commit 2 (P11): every `provider.call` now requires a
+// `correlationId`. Tests share one sentinel so an eyeball grep can
+// verify it is echoed into the `anthropic-trace-id` request header
+// and nowhere else.
+const CORR_ID = 'corr-anthropic-test-0001';
 
 function req(
   overrides: Partial<NormalizedLLMRequest> = {},
@@ -66,7 +71,7 @@ describe('anthropic.call — outbound wire format', () => {
       timeoutSignal: neverTimeout,
     });
 
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
 
     expect(res.ok).toBe(true);
     expect(http.received).toHaveLength(1);
@@ -84,7 +89,7 @@ describe('anthropic.call — outbound wire format', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    await provider.call({ apiKey: KEY, request: req() });
+    await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(http.received[0]!.url).not.toContain(KEY);
   });
 
@@ -96,6 +101,7 @@ describe('anthropic.call — outbound wire format', () => {
     });
     await provider.call({
       apiKey: KEY,
+      correlationId: CORR_ID,
       request: req({
         systemPrompt: 'be helpful',
         temperature: 0.3,
@@ -119,6 +125,7 @@ describe('anthropic.call — outbound wire format', () => {
     });
     await provider.call({
       apiKey: KEY,
+      correlationId: CORR_ID,
       request: req({
         messages: [
           {
@@ -147,6 +154,7 @@ describe('anthropic.call — outbound wire format', () => {
     });
     await provider.call({
       apiKey: KEY,
+      correlationId: CORR_ID,
       request: req({
         toolDefinitions: [
           {
@@ -177,7 +185,7 @@ describe('anthropic.call — inbound response parsing', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     expect(res.value.providerUsed).toBe('anthropic');
@@ -212,7 +220,7 @@ describe('anthropic.call — inbound response parsing', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     expect(res.value.stopReason).toBe('tool_use');
@@ -237,7 +245,7 @@ describe('anthropic.call — inbound response parsing', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     // 500 bucket classifier → provider_down
@@ -252,7 +260,7 @@ describe('anthropic.call — inbound response parsing', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     expect(res.value.stopReason).toBe('max_tokens');
@@ -268,7 +276,7 @@ describe('anthropic.call — error mapping (§7.1)', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error.kind).toBe('invalid_key');
@@ -280,7 +288,7 @@ describe('anthropic.call — error mapping (§7.1)', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error.kind).toBe('quota_exhausted');
@@ -292,7 +300,7 @@ describe('anthropic.call — error mapping (§7.1)', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error).toMatchObject({ kind: 'rate_limit', retryAfterSec: 17 });
@@ -306,7 +314,7 @@ describe('anthropic.call — error mapping (§7.1)', () => {
         http: http.fn,
         timeoutSignal: neverTimeout,
       });
-      const res = await provider.call({ apiKey: KEY, request: req() });
+      const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
       expect(res.ok).toBe(false);
       if (res.ok) return;
       expect(res.error.kind).toBe('provider_down');
@@ -319,7 +327,7 @@ describe('anthropic.call — error mapping (§7.1)', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error.kind).toBe('provider_down');
@@ -338,7 +346,7 @@ describe('anthropic.call — error mapping (§7.1)', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error.kind).toBe('context_too_long');
@@ -357,7 +365,7 @@ describe('anthropic.call — error mapping (§7.1)', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error.kind).toBe('content_blocked');
@@ -369,7 +377,7 @@ describe('anthropic.call — error mapping (§7.1)', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error).toEqual({ kind: 'network_error', transient: true });
@@ -381,7 +389,7 @@ describe('anthropic.call — error mapping (§7.1)', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error.kind).toBe('network_error');
@@ -505,6 +513,7 @@ describe('anthropic — outbound block translation edges', () => {
     });
     await provider.call({
       apiKey: KEY,
+      correlationId: CORR_ID,
       request: req({
         messages: [
           {
@@ -541,6 +550,7 @@ describe('anthropic — outbound block translation edges', () => {
     });
     await provider.call({
       apiKey: KEY,
+      correlationId: CORR_ID,
       request: req({
         messages: [
           {
@@ -566,6 +576,7 @@ describe('anthropic — outbound block translation edges', () => {
     });
     await provider.call({
       apiKey: KEY,
+      correlationId: CORR_ID,
       request: req({
         messages: [
           {
@@ -600,6 +611,7 @@ describe('anthropic — outbound block translation edges', () => {
     });
     await provider.call({
       apiKey: KEY,
+      correlationId: CORR_ID,
       request: req({
         messages: [
           {
@@ -639,7 +651,7 @@ describe('anthropic — inbound response parse guards', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error.kind).toBe('provider_down');
@@ -653,7 +665,7 @@ describe('anthropic — inbound response parse guards', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error.kind).toBe('provider_down');
@@ -667,7 +679,7 @@ describe('anthropic — inbound response parse guards', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error.kind).toBe('provider_down');
@@ -681,7 +693,7 @@ describe('anthropic — inbound response parse guards', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error.kind).toBe('provider_down');
@@ -695,7 +707,7 @@ describe('anthropic — inbound response parse guards', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error.kind).toBe('provider_down');
@@ -712,7 +724,7 @@ describe('anthropic — inbound response parse guards', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     expect(res.value.usage).toEqual({
@@ -731,7 +743,7 @@ describe('anthropic — inbound response parse guards', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     expect(res.value.stopReason).toBe('end_turn');
@@ -745,7 +757,7 @@ describe('anthropic — inbound response parse guards', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     expect(res.value.stopReason).toBe('stop_sequence');
@@ -768,7 +780,7 @@ describe('anthropic — inbound response parse guards', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     expect(res.value.message.content).toEqual([
@@ -789,7 +801,7 @@ describe('anthropic — providerRequestId fallback paths', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     expect('providerRequestId' in res.value).toBe(false);
@@ -805,7 +817,7 @@ describe('anthropic — providerRequestId fallback paths', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     expect(res.value.providerRequestId).toBe('req_alt');
@@ -819,7 +831,7 @@ describe('anthropic — providerRequestId fallback paths', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     expect(res.value.providerRequestId).toBe('msg_body_only');
@@ -836,7 +848,7 @@ describe('anthropic — retry-after parsing', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     if (res.error.kind !== 'rate_limit') throw new Error('expected rate_limit');
@@ -851,7 +863,7 @@ describe('anthropic — retry-after parsing', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error).toMatchObject({ kind: 'rate_limit', retryAfterSec: 0 });
@@ -865,7 +877,7 @@ describe('anthropic — retry-after parsing', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     if (res.error.kind !== 'rate_limit') throw new Error('expected rate_limit');
@@ -884,7 +896,7 @@ describe('anthropic — retry-after parsing', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error).toMatchObject({ kind: 'rate_limit', retryAfterSec: 0 });
@@ -905,7 +917,7 @@ describe('anthropic — 400 + unknown message shape', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error.kind).toBe('internal');
@@ -925,7 +937,7 @@ describe('anthropic — 400 + unknown message shape', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error.kind).toBe('context_too_long');
@@ -945,7 +957,7 @@ describe('anthropic — 400 + unknown message shape', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error.kind).toBe('content_blocked');
@@ -965,7 +977,7 @@ describe('anthropic — 400 + unknown message shape', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error.kind).toBe('content_blocked');
@@ -981,7 +993,7 @@ describe('anthropic — 400 + unknown message shape', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error.kind).toBe('internal');
@@ -999,7 +1011,7 @@ describe('anthropic — transport + signal composition edges', () => {
       http: fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error.kind).toBe('internal');
@@ -1013,7 +1025,7 @@ describe('anthropic — transport + signal composition edges', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error.kind).toBe('network_error');
@@ -1025,7 +1037,7 @@ describe('anthropic — transport + signal composition edges', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error.kind).toBe('network_error');
@@ -1042,6 +1054,7 @@ describe('anthropic — transport + signal composition edges', () => {
     const ctrl = new AbortController();
     await provider.call({
       apiKey: KEY,
+      correlationId: CORR_ID,
       request: req(),
       abortSignal: ctrl.signal,
     });
@@ -1069,6 +1082,7 @@ describe('anthropic — transport + signal composition edges', () => {
       const ctrl = new AbortController();
       await provider.call({
         apiKey: KEY,
+        correlationId: CORR_ID,
         request: req(),
         abortSignal: ctrl.signal,
       });
@@ -1088,6 +1102,7 @@ describe('anthropic — transport + signal composition edges', () => {
       ctrl.abort();
       await provider.call({
         apiKey: KEY,
+        correlationId: CORR_ID,
         request: req(),
         abortSignal: ctrl.signal,
       });
@@ -1101,8 +1116,52 @@ describe('anthropic — transport + signal composition edges', () => {
         http: http.fn,
         timeoutSignal: neverTimeout,
       });
-      await provider.call({ apiKey: KEY, request: req() });
+      await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
       expect(http.received[0]!.signal).toBeDefined();
     });
+  });
+});
+
+describe('anthropic — correlationId header plumbing (iter 6 commit 2)', () => {
+  it('stamps the caller-supplied correlationId as the anthropic-trace-id header on call()', async () => {
+    const http = fakeHttp(jsonResponse(200, successBody()));
+    const provider = createAnthropicProvider({
+      http: http.fn,
+      timeoutSignal: neverTimeout,
+    });
+    await provider.call({
+      apiKey: KEY,
+      correlationId: 'corr-anth-trace-stamped-XYZ',
+      request: req(),
+    });
+
+    const sent = http.received[0]!;
+    // Verbatim with §10.1: Anthropic's upstream trace header is
+    // lowercase `anthropic-trace-id`. Must equal the caller's id so
+    // the provider's backend trace stitches back to our root span.
+    expect(sent.headers['anthropic-trace-id']).toBe(
+      'corr-anth-trace-stamped-XYZ',
+    );
+    // Must NOT leak into URL or body.
+    expect(sent.url).not.toContain('corr-anth-trace-stamped-XYZ');
+    expect(sent.body ?? '').not.toContain('corr-anth-trace-stamped-XYZ');
+  });
+
+  it('ping() omits the anthropic-trace-id header — pings have no router-owned correlationId', async () => {
+    const http = fakeHttp(jsonResponse(200, successBody()));
+    const provider = createAnthropicProvider({
+      http: http.fn,
+      timeoutSignal: neverTimeout,
+    });
+    const res = await provider.ping({ apiKey: KEY });
+    expect(res.ok).toBe(true);
+
+    const sent = http.received[0]!;
+    // `ProviderPingInput` is intentionally not plumbed with a
+    // correlation id (see `provider.ts` JSDoc); therefore the header
+    // must be absent — never empty-string, never `undefined`.
+    expect(
+      Object.prototype.hasOwnProperty.call(sent.headers, 'anthropic-trace-id'),
+    ).toBe(false);
   });
 });

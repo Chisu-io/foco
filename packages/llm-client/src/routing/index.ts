@@ -22,6 +22,8 @@ export {
   type CircuitState,
   type CircuitStateChangeEvent,
   type OnCircuitStateChange,
+  type OriginKind,
+  type ProviderCallContext,
   classifyOutcomeForBreaker,
   gaugeValueForState,
 } from './events.js';

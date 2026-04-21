@@ -138,7 +138,7 @@ async function anthropicCall(
     response = await deps.http({
       method: 'POST',
       url: deps.endpoint,
-      headers: authHeaders(input.apiKey, deps.apiVersion),
+      headers: authHeaders(input.apiKey, deps.apiVersion, input.correlationId),
       body: JSON.stringify(body),
       signal,
     });
@@ -169,7 +169,11 @@ async function anthropicPing(
     response = await deps.http({
       method: 'POST',
       url: deps.endpoint,
-      headers: authHeaders(input.apiKey, deps.apiVersion),
+      // Ping uses `ProviderPingInput`, which carries no correlation
+      // id — pings run outside the router's call chain (cron at §6
+      // + settings UI probe). Pass `undefined` so `authHeaders`
+      // omits `anthropic-trace-id`.
+      headers: authHeaders(input.apiKey, deps.apiVersion, undefined),
       body: JSON.stringify(body),
       signal,
     });
@@ -190,15 +194,44 @@ async function anthropicPing(
 
 // ─── Outbound wire format ────────────────────────────────────────────
 
+/**
+ * Build Anthropic auth headers.
+ *
+ * `correlationId` is threaded from `ProviderCallInput.correlationId`
+ * (iter 6 commit 2). When present, it travels as `anthropic-trace-id` —
+ * Anthropic treats this header as an opaque per-request trace tag that
+ * is echoed back in the `request-id` response header and in their
+ * support tooling, letting us correlate our logs and Anthropic's own
+ * without any extra round-trip.
+ *
+ * `ping` passes `undefined` — pings run outside the router's call
+ * chain so there is no correlation id to stamp. Production call paths
+ * always provide one (P11).
+ *
+ * @see docs/LLM_CLIENT.md §9.1
+ * @see .cmsgs/iter6-otel-correlation-design.md §3 (commit 2 scope)
+ */
 function authHeaders(
   apiKey: string,
   apiVersion: string,
+  correlationId: string | undefined,
 ): Readonly<Record<string, string>> {
-  return Object.freeze({
+  const base = {
     'content-type': 'application/json',
     accept: 'application/json',
     'x-api-key': apiKey,
     'anthropic-version': apiVersion,
+  };
+  if (correlationId === undefined) {
+    return Object.freeze(base);
+  }
+  return Object.freeze({
+    ...base,
+    // Anthropic's convention for customer-side trace tagging. Spelling
+    // lifted verbatim from the Messages API guide; it is case-
+    // insensitive on the wire but we send lowercase to match the rest
+    // of this header block and to be deterministic for tests.
+    'anthropic-trace-id': correlationId,
   });
 }
 

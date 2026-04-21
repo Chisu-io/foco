@@ -54,6 +54,7 @@ import {
   type CircuitBreaker,
   type ApiKeyRequest,
   type ApiKeyResolver,
+  type OriginKind,
   type PlanRouter,
   type ProviderRegistry,
   type ResolvedKey,
@@ -72,6 +73,16 @@ import type {
 import type { ProviderCallOutput } from '../../src/types/response.js';
 
 // ─── Test harness ─────────────────────────────────────────────────────
+//
+// Iter 6 commit 2 (P1, P10): `RouteInput` now requires `correlationId`
+// + `origin`. Tests default to these sentinels; specs that care about
+// identity pass their own value explicitly.
+
+/** Default correlation id for routing-layer specs. */
+const DEFAULT_CORR_ID = 'route-test-corr-0000000000000001';
+
+/** Default producer-surface origin — caption-refine is the most common call path. */
+const DEFAULT_ORIGIN: OriginKind = 'caption-refine';
 
 function flags(): FlagsReader {
   return createStaticFlagsReader(FLAG_DEFAULTS);
@@ -88,6 +99,13 @@ class FakeProvider implements Provider {
   readonly callLog: Array<{
     apiKey: string;
     abortSignal: AbortSignal | undefined;
+    /**
+     * Captured from `ProviderCallInput.correlationId` — iter 6 commit 2
+     * (P11) threaded this field through the adapter boundary. The test
+     * harness records it so specs can assert the router propagates the
+     * caller's id verbatim (no minting, no rewriting).
+     */
+    correlationId: string;
   }> = [];
 
   constructor(name: ProviderName) {
@@ -119,6 +137,7 @@ class FakeProvider implements Provider {
     this.callLog.push({
       apiKey: input.apiKey,
       abortSignal: input.abortSignal,
+      correlationId: input.correlationId,
     });
     const next = this.outcomes.shift();
     if (next === undefined) {
@@ -331,6 +350,8 @@ describe('PlanRouter — Free / Creator (BYOK mandatory)', () => {
         ...userOverrides,
       },
       request: baseRequest(requestOverrides),
+      correlationId: DEFAULT_CORR_ID,
+      origin: DEFAULT_ORIGIN,
     });
   }
 
@@ -565,6 +586,8 @@ describe('PlanRouter — Influencer / Celebrity (Managed + optional BYOK)', () =
         ...userOverrides,
       },
       request: baseRequest(requestOverrides),
+      correlationId: DEFAULT_CORR_ID,
+      origin: DEFAULT_ORIGIN,
     });
   }
 
@@ -948,6 +971,8 @@ describe('PlanRouter — Influencer / Celebrity (Managed + optional BYOK)', () =
         llmPreferMyKey: true,
       },
       request: baseRequest(),
+      correlationId: DEFAULT_CORR_ID,
+      origin: DEFAULT_ORIGIN,
     });
 
     expect(res.ok).toBe(true);
@@ -982,6 +1007,8 @@ describe('PlanRouter — Studio', () => {
         llmPreferMyKey: true,
       },
       request: baseRequest(),
+      correlationId: DEFAULT_CORR_ID,
+      origin: DEFAULT_ORIGIN,
     });
 
     expect(res.ok).toBe(true);
@@ -1013,6 +1040,8 @@ describe('PlanRouter — circuit-breaker integration', () => {
     const res = await router.route({
       user: { userId: 'u-1', plan: 'influencer' },
       request: baseRequest(),
+      correlationId: DEFAULT_CORR_ID,
+      origin: DEFAULT_ORIGIN,
     });
 
     expect(res.ok).toBe(false);
@@ -1061,6 +1090,8 @@ describe('PlanRouter — circuit-breaker integration', () => {
       const res = await router.route({
         user,
         request: baseRequest(),
+        correlationId: DEFAULT_CORR_ID,
+        origin: DEFAULT_ORIGIN,
       });
       expect(res.ok).toBe(false);
     }
@@ -1072,6 +1103,8 @@ describe('PlanRouter — circuit-breaker integration', () => {
     const res = await router.route({
       user,
       request: baseRequest(),
+      correlationId: DEFAULT_CORR_ID,
+      origin: DEFAULT_ORIGIN,
     });
     expect(res.ok).toBe(false);
     if (res.ok) return;
@@ -1081,10 +1114,141 @@ describe('PlanRouter — circuit-breaker integration', () => {
   });
 });
 
+// ─── correlationId plumbing (iter 6 commit 2 — P10/P11) ──────────────
+
+describe('PlanRouter — correlationId propagation', () => {
+  /**
+   * P11 (LLM_CLIENT v1.1 §11): the caller's correlationId must reach
+   * the adapter verbatim so the provider call, the root span, and the
+   * audit log share the same identifier. If the router ever rewrites
+   * or mints a new id on the happy path, root-to-leaf stitching breaks
+   * silently in production dashboards.
+   */
+  it('threads RouteInput.correlationId into ProviderCallInput.correlationId verbatim on the happy path', async () => {
+    const provider = new FakeProvider('anthropic');
+    const resolver = new FakeResolver();
+    const metrics = new InMemoryMetrics();
+    resolver.enqueueManagedSuccess('sk-managed', 'anthropic');
+    provider.enqueueSuccess();
+
+    const router = buildRouter(
+      provider,
+      resolver,
+      closedBreaker(),
+      metrics,
+    );
+
+    const passedCorrId = 'happy-path-corr-0123456789abcdef';
+    const res = await router.route({
+      user: { userId: 'u-corr-1', plan: 'influencer' },
+      request: baseRequest(),
+      correlationId: passedCorrId,
+      origin: 'hook-brainstorm',
+    });
+
+    expect(res.ok).toBe(true);
+    // One call, one id — same id as the caller supplied.
+    expect(provider.callLog).toHaveLength(1);
+    expect(provider.callLog[0]!.correlationId).toBe(passedCorrId);
+  });
+
+  /**
+   * Fallback path also threads the caller's id: both the BYOK attempt
+   * and the Managed retry must share the same correlationId, because
+   * from the outside they are a single logical LLM call. The commit-2
+   * invariant is "one RouteInput.correlationId → every physical
+   * provider call on its behalf".
+   */
+  it('reuses the same correlationId for BYOK attempt + Managed fallback (Influencer invalid_key retry)', async () => {
+    const provider = new FakeProvider('anthropic');
+    const resolver = new FakeResolver();
+    const metrics = new InMemoryMetrics();
+    resolver.enqueueByokSuccess('sk-byok', 'anthropic');
+    provider.enqueueError(make.invalidKey('anthropic'));
+    resolver.enqueueManagedSuccess('sk-managed', 'anthropic');
+    provider.enqueueSuccess();
+
+    const router = buildRouter(
+      provider,
+      resolver,
+      closedBreaker(),
+      metrics,
+      () => {},
+    );
+
+    const passedCorrId = 'fallback-corr-fedcba9876543210';
+    const res = await router.route({
+      user: {
+        userId: 'u-corr-2',
+        plan: 'influencer',
+        llmKeyProvider: 'anthropic',
+        llmKeyStatus: 'active',
+        llmPreferMyKey: true,
+      },
+      request: baseRequest(),
+      correlationId: passedCorrId,
+      origin: 'caption-refine',
+    });
+
+    expect(res.ok).toBe(true);
+    expect(provider.callLog).toHaveLength(2);
+    expect(provider.callLog[0]!.correlationId).toBe(passedCorrId);
+    expect(provider.callLog[1]!.correlationId).toBe(passedCorrId);
+  });
+
+  /**
+   * Two parallel `route()` calls with different ids must keep their
+   * ids separate — a dumb aliasing bug (e.g. a module-level mutable
+   * holder) would only surface under concurrency.
+   */
+  it('isolates correlationIds across concurrent route() calls', async () => {
+    const provider = new FakeProvider('anthropic');
+    const resolver = new FakeResolver();
+    const metrics = new InMemoryMetrics();
+    // Two managed resolves + two provider successes, consumed FIFO.
+    resolver.enqueueManagedSuccess('sk-m1', 'anthropic');
+    resolver.enqueueManagedSuccess('sk-m2', 'anthropic');
+    provider.enqueueSuccess();
+    provider.enqueueSuccess();
+
+    const router = buildRouter(
+      provider,
+      resolver,
+      closedBreaker(),
+      metrics,
+    );
+
+    const corrA = 'concurrent-corr-AAAAAAAAAAAAAAAA';
+    const corrB = 'concurrent-corr-BBBBBBBBBBBBBBBB';
+    await Promise.all([
+      router.route({
+        user: { userId: 'u-a', plan: 'influencer' },
+        request: baseRequest(),
+        correlationId: corrA,
+        origin: DEFAULT_ORIGIN,
+      }),
+      router.route({
+        user: { userId: 'u-b', plan: 'influencer' },
+        request: baseRequest(),
+        correlationId: corrB,
+        origin: DEFAULT_ORIGIN,
+      }),
+    ]);
+
+    expect(provider.callLog).toHaveLength(2);
+    const seen = new Set(provider.callLog.map((e) => e.correlationId));
+    expect(seen).toEqual(new Set([corrA, corrB]));
+  });
+});
+
 // ─── Misconfigured registry → internal ────────────────────────────────
 
 describe('PlanRouter — deployment misconfiguration', () => {
-  it('returns `internal` with a correlationId when the provider is not registered', async () => {
+  it('returns `internal` stamped with the caller-supplied correlationId when the provider is not registered', async () => {
+    // P10 (LLM_CLIENT v1.1 §10): the router must NOT mint its own
+    // correlation id on the internal-error path — it must reuse
+    // `input.correlationId` so the root span + audit log stay
+    // stitchable. See iter 6 commit 2.
     const resolver = new FakeResolver();
     const metrics = new InMemoryMetrics();
     const router = createPlanRouter({
@@ -1095,15 +1259,22 @@ describe('PlanRouter — deployment misconfiguration', () => {
       metrics,
     });
 
+    const passedCorrId = 'misconfig-corr-aabbccddeeff0011';
     const res = await router.route({
       user: { userId: 'u', plan: 'free' },
       request: baseRequest(),
+      correlationId: passedCorrId,
+      origin: DEFAULT_ORIGIN,
     });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error.kind).toBe('internal');
     if (res.error.kind !== 'internal') return;
-    expect(res.error.correlationId).toMatch(/^[0-9a-f]{16}$/);
+    // Equality, NOT a regex match: the router surfaces the caller's id
+    // verbatim. If this ever flips back to a minted id, the contract
+    // with the caller (which already stamped a root span with the id)
+    // silently drifts.
+    expect(res.error.correlationId).toBe(passedCorrId);
   });
 });
 
@@ -1129,6 +1300,8 @@ describe('PlanRouter — AbortSignal plumbing', () => {
       user: { userId: 'u', plan: 'influencer' },
       request: baseRequest(),
       abortSignal: ac.signal,
+      correlationId: DEFAULT_CORR_ID,
+      origin: DEFAULT_ORIGIN,
     });
 
     expect(res.ok).toBe(true);

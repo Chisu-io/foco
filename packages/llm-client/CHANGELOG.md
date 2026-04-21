@@ -7,6 +7,106 @@ and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Iteration 6 commit 2 (correlationId threading + provider trace headers)
+
+- `src/routing/events.ts`: two net-new types formalising the
+  routing-layer call context (§3.3 lines 285–287 of the signed
+  `LLM_CLIENT.md v1.1`). `OriginKind` is a closed three-member union
+  (`caption-refine` | `hook-brainstorm` | `mcp-server-callback`) —
+  widening it requires a contract amendment per `feedback_foco_three_contracts_rule`.
+  `ProviderCallContext` is the **routing-internal** shape with
+  `correlationId` (required), optional `deadline` and `idempotencyKey`,
+  and `fundingMode` + `origin` (required). Only `correlationId` crosses
+  the adapter boundary — the adapter does not see `fundingMode`,
+  `origin`, `deadline`, or `idempotencyKey` (keeping adapters BYOK/
+  Managed-agnostic and free of attribution concerns).
+- `src/routing/plan-router.ts`: `RouteInput` gains `correlationId:
+  string` and `origin: OriginKind` — both **required, additive** (P1).
+  `doProviderCall()` signature extended with a `correlationId` arg that
+  is passed verbatim to `provider.call({ …, correlationId })` at all
+  three call sites (BYOK attempt, Managed direct, Managed fallback).
+  The internal-error branch at the misconfigured-registry path now
+  surfaces `input.correlationId` verbatim instead of minting a fresh
+  random id via the old `newCorrelationId()` helper (P10) — this keeps
+  the root span (iter 6 commit 3) and the `internal` error on the same
+  identity so post-hoc stitching in Grafana + audit_log stays exact.
+  The `newCorrelationId()` function has been removed and its
+  `node:crypto` `randomBytes` import dropped.
+- `src/providers/provider.ts`: `ProviderCallInput` gains
+  `correlationId: string` (required, P11). This is the **only** piece
+  of `ProviderCallContext` that crosses the adapter boundary. Adapters
+  stamp it into the outbound HTTP request; the router, not the adapter,
+  owns hashing the `idempotencyKey` and mapping `fundingMode` → span
+  attribute.
+- `src/providers/anthropic.ts`: outbound HTTP emits header
+  `anthropic-trace-id: <correlationId>` (lowercase name per Anthropic's
+  convention). The id is written as-is — no hashing, no truncation.
+  `ping()` is a probe, not a call-surface; it does NOT emit the header.
+- `src/providers/openai.ts`: outbound HTTP emits header
+  `X-Request-ID: <correlationId>` (canonical caps per OpenAI's
+  convention). Same handling as Anthropic — only `call()`, never
+  `ping()`.
+- `src/providers/gemini.ts`: Gemini (AI Studio) has no standard trace
+  header. The adapter **deliberately emits none** — the correlationId
+  still flows into the local span and the audit trail via the router;
+  it just does not leave the outbound wire. Documented as an explicit
+  non-decision so a future Gemini header (e.g. `x-goog-request-id`)
+  can be added behind a feature flag without a contract amendment.
+- `test/routing/plan-router.test.ts`: test harness updated. `RouteInput`
+  helpers `routeAsFree` and `routeAsInfluencer` seed every route with
+  module-level defaults (`DEFAULT_CORR_ID`,
+  `DEFAULT_ORIGIN = 'caption-refine'`); the 7 direct `router.route({...})`
+  call sites are updated to pass both fields. `FakeProvider.callLog`
+  now captures `correlationId` so specs can assert propagation. Three
+  new specs: (a) happy-path Influencer-Managed call threads
+  `RouteInput.correlationId` verbatim into
+  `ProviderCallInput.correlationId`; (b) BYOK → Managed fallback on
+  `invalid_key` reuses the **same** correlationId on both physical
+  provider calls (from the outside they are one logical LLM call);
+  (c) two concurrent `route()` calls with distinct ids keep their ids
+  isolated (canary against aliasing bugs in mutable module state).
+  The misconfigured-registry spec (internal-error path) was rewritten:
+  the assertion changed from a 16-hex regex match to an equality check
+  against the caller-supplied correlationId, locking down P10.
+- `test/providers/{anthropic,openai,gemini}.test.ts`: every
+  `provider.call({...})` site now passes `correlationId: CORR_ID`
+  (provider-local constant). New describe blocks assert the trace
+  header plumbing end-to-end: Anthropic emits
+  `headers['anthropic-trace-id']`, OpenAI emits `headers['X-Request-ID']`,
+  Gemini emits NEITHER (nor `x-request-id`). All three specs verify
+  the id does not leak into URL or body, and that `ping()` never
+  emits the header.
+- `test/routing/events.test.ts`: new structural-contract describe
+  blocks for `ProviderCallContext` (minimum shape with just
+  `correlationId` + `fundingMode` + `origin`; fully-populated shape
+  including `deadline` + `idempotencyKey`; `exactOptionalPropertyTypes`
+  discipline — absent fields must NOT be set to `undefined` in the
+  object literal) and `OriginKind` (exhaustiveness canary: the array
+  literal `['caption-refine','hook-brainstorm','mcp-server-callback']`
+  typechecks only while the union has exactly three members; `switch`
+  exhaustiveness via a `const fallthrough: never = o` branch).
+- `src/routing/index.ts` and `src/index.ts` barrels: `OriginKind` and
+  `ProviderCallContext` exported. Consumers get them from
+  `@chisu/llm-client/routing` directly, or through the package root
+  via the existing `export *` pass-through.
+- `README.md`: new "§ correlationId + trace headers" section
+  documenting the three invariants: (1) the caller supplies a
+  `correlationId`, the router threads it, the adapter stamps it; no
+  layer mints a new one on the happy path; (2) `ProviderCallContext`
+  is routing-internal, `ProviderCallInput` is adapter-facing and only
+  `correlationId` crosses the boundary; (3) header conventions are
+  provider-specific: Anthropic `anthropic-trace-id`, OpenAI
+  `X-Request-ID`, Gemini none.
+
+This commit only **threads** the correlation id — the OTel root span
+(`llm.client.call`), the `llm.provider.request` sub-span, and the
+`llm.kms.decrypt_dek` sub-span are still deferred to commit 3.
+Breaker API (`isCallAllowed` / `record` / `currentState`) stays intact
+per P3 of the iter 6 §8.1 divergence-resolution; no `execute(fn)`
+method is added (would widen the signed contract without an
+adjustment). Deadline propagation into `kek.ts::kmsCallOnce` lands in
+commit 5.
+
 ### Added — Iteration 6 commit 1 (OTel tracer DI seam + `withSpan` helper)
 
 - `src/observability/tracing.ts`: tracer DI seam (`setTracer(t)` /

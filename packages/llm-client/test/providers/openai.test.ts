@@ -30,6 +30,11 @@ import type { NormalizedLLMRequest } from '../../src/types/request.js';
 import { fakeHttp, jsonResponse, neverTimeout, throwTransport } from './_fake-http.js';
 
 const KEY = 'sk-openai-test-SECRET';
+// Iter 6 commit 2 (P11): every `provider.call` now requires a
+// `correlationId`. Tests share one sentinel so an eyeball grep can
+// verify it is echoed into the `X-Request-ID` request header and
+// nowhere else.
+const CORR_ID = 'corr-openai-test-0001';
 
 function req(
   overrides: Partial<NormalizedLLMRequest> = {},
@@ -65,7 +70,7 @@ describe('openai.call — outbound wire format', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    await provider.call({ apiKey: KEY, request: req() });
+    await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     const sent = http.received[0]!;
     expect(sent.method).toBe('POST');
     expect(sent.url).toBe(OPENAI_ENDPOINT);
@@ -79,7 +84,7 @@ describe('openai.call — outbound wire format', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    await provider.call({ apiKey: KEY, request: req() });
+    await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(http.received[0]!.url).not.toContain(KEY);
   });
 
@@ -91,6 +96,7 @@ describe('openai.call — outbound wire format', () => {
     });
     await provider.call({
       apiKey: KEY,
+      correlationId: CORR_ID,
       request: req({ systemPrompt: 'be concise' }),
     });
     const body = JSON.parse(http.received[0]!.body ?? '{}');
@@ -106,6 +112,7 @@ describe('openai.call — outbound wire format', () => {
     });
     await provider.call({
       apiKey: KEY,
+      correlationId: CORR_ID,
       request: req({ stopSequences: ['STOP'], temperature: 0.5 }),
     });
     const body = JSON.parse(http.received[0]!.body ?? '{}');
@@ -122,6 +129,7 @@ describe('openai.call — outbound wire format', () => {
     });
     await provider.call({
       apiKey: KEY,
+      correlationId: CORR_ID,
       request: req({ responseFormat: 'json_object' }),
     });
     const body = JSON.parse(http.received[0]!.body ?? '{}');
@@ -136,6 +144,7 @@ describe('openai.call — outbound wire format', () => {
     });
     await provider.call({
       apiKey: KEY,
+      correlationId: CORR_ID,
       request: req({
         toolDefinitions: [
           { name: 'lookup', description: 'look', parameters: { type: 'object' } },
@@ -163,6 +172,7 @@ describe('openai.call — outbound wire format', () => {
     });
     await provider.call({
       apiKey: KEY,
+      correlationId: CORR_ID,
       request: req({
         messages: [
           {
@@ -192,7 +202,7 @@ describe('openai.call — inbound response parsing', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     expect(res.value.providerUsed).toBe('openai');
@@ -223,7 +233,7 @@ describe('openai.call — inbound response parsing', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     expect(res.value.stopReason).toBe('max_tokens');
@@ -259,7 +269,7 @@ describe('openai.call — inbound response parsing', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     expect(res.value.stopReason).toBe('tool_use');
@@ -290,7 +300,7 @@ describe('openai.call — inbound response parsing', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error).toEqual({ kind: 'content_blocked', reason: 'moderation' });
@@ -306,7 +316,7 @@ describe('openai.call — error mapping (§7.1)', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: 'bad', request: req() });
+    const res = await provider.call({ apiKey: 'bad', request: req(), correlationId: CORR_ID });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error.kind).toBe('invalid_key');
@@ -320,7 +330,7 @@ describe('openai.call — error mapping (§7.1)', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error.kind).toBe('rate_limit');
@@ -336,7 +346,7 @@ describe('openai.call — error mapping (§7.1)', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error.kind).toBe('quota_exhausted');
@@ -352,7 +362,7 @@ describe('openai.call — error mapping (§7.1)', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error.kind).toBe('context_too_long');
@@ -368,7 +378,7 @@ describe('openai.call — error mapping (§7.1)', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error.kind).toBe('content_blocked');
@@ -380,7 +390,7 @@ describe('openai.call — error mapping (§7.1)', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error.kind).toBe('provider_down');
@@ -392,7 +402,7 @@ describe('openai.call — error mapping (§7.1)', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error).toEqual({ kind: 'network_error', transient: true });
@@ -505,7 +515,7 @@ describe('openai — inbound tool_calls parsing edge cases', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     expect(res.value.message.content).toEqual([
@@ -545,7 +555,7 @@ describe('openai — inbound tool_calls parsing edge cases', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     expect(res.value.message.content[0]).toMatchObject({
@@ -581,7 +591,7 @@ describe('openai — inbound tool_calls parsing edge cases', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     expect(res.value.message.content[0]).toMatchObject({
@@ -612,7 +622,7 @@ describe('openai — inbound tool_calls parsing edge cases', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     expect(res.value.providerRequestId).toBeUndefined();
@@ -624,7 +634,7 @@ describe('openai — inbound tool_calls parsing edge cases', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     expect(res.value.providerRequestId).toBe('chatcmpl_01');
@@ -640,7 +650,7 @@ describe('openai — inbound tool_calls parsing edge cases', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error.kind).toBe('provider_down');
@@ -653,7 +663,7 @@ describe('openai — inbound tool_calls parsing edge cases', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error.kind).toBe('provider_down');
@@ -671,7 +681,7 @@ describe('openai — error body & hint fallback heuristics', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: 'bad', request: req() });
+    const res = await provider.call({ apiKey: 'bad', request: req(), correlationId: CORR_ID });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error.kind).toBe('invalid_key');
@@ -687,7 +697,7 @@ describe('openai — error body & hint fallback heuristics', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error.kind).toBe('quota_exhausted');
@@ -703,7 +713,7 @@ describe('openai — error body & hint fallback heuristics', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error.kind).toBe('context_too_long');
@@ -719,7 +729,7 @@ describe('openai — error body & hint fallback heuristics', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error.kind).toBe('context_too_long');
@@ -735,7 +745,7 @@ describe('openai — error body & hint fallback heuristics', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error.kind).toBe('content_blocked');
@@ -751,7 +761,7 @@ describe('openai — error body & hint fallback heuristics', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error.kind).toBe('content_blocked');
@@ -765,7 +775,7 @@ describe('openai — error body & hint fallback heuristics', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error.kind).toBe('internal');
@@ -783,7 +793,7 @@ describe('openai — retry-after header parsing', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error).toMatchObject({ kind: 'rate_limit', retryAfterSec: 42 });
@@ -800,7 +810,7 @@ describe('openai — retry-after header parsing', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     if (res.error.kind !== 'rate_limit') throw new Error('expected rate_limit');
@@ -818,7 +828,7 @@ describe('openai — retry-after header parsing', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error).toMatchObject({ kind: 'rate_limit', retryAfterSec: 0 });
@@ -834,7 +844,7 @@ describe('openai — retry-after header parsing', () => {
       http: http.fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error.kind).toBe('rate_limit');
@@ -924,7 +934,7 @@ describe('openai — transport + signal composition edge cases', () => {
       http: fn,
       timeoutSignal: neverTimeout,
     });
-    const res = await provider.call({ apiKey: KEY, request: req() });
+    const res = await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req() });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error.kind).toBe('internal');
@@ -939,7 +949,7 @@ describe('openai — transport + signal composition edge cases', () => {
       timeoutSignal: neverTimeout,
     });
     const ctrl = new AbortController();
-    await provider.call({ apiKey: KEY, request: req(), abortSignal: ctrl.signal });
+    await provider.call({ apiKey: KEY, correlationId: CORR_ID, request: req(), abortSignal: ctrl.signal });
     expect(http.received).toHaveLength(1);
     // Signal is composed; the mock simply forwarded the request.
     expect(http.received[0]!.signal).toBeDefined();
@@ -967,6 +977,7 @@ describe('openai — transport + signal composition edge cases', () => {
       const ctrl = new AbortController();
       await provider.call({
         apiKey: KEY,
+        correlationId: CORR_ID,
         request: req(),
         abortSignal: ctrl.signal,
       });
@@ -983,11 +994,57 @@ describe('openai — transport + signal composition edge cases', () => {
       ctrl.abort(); // pre-aborted before the composition
       await provider.call({
         apiKey: KEY,
+        correlationId: CORR_ID,
         request: req(),
         abortSignal: ctrl.signal,
       });
       expect(http.received[0]!.signal?.aborted).toBe(true);
     });
+  });
+});
+
+describe('openai — correlationId header plumbing (iter 6 commit 2)', () => {
+  it('stamps the caller-supplied correlationId as the X-Request-ID header on call()', async () => {
+    const http = fakeHttp(jsonResponse(200, successBody()));
+    const provider = createOpenAIProvider({
+      http: http.fn,
+      timeoutSignal: neverTimeout,
+    });
+    await provider.call({
+      apiKey: KEY,
+      correlationId: 'corr-openai-trace-stamped-XYZ',
+      request: req(),
+    });
+
+    const sent = http.received[0]!;
+    // Verbatim with §10.1: OpenAI's upstream trace header is
+    // canonical-cased `X-Request-ID`. We do not lowercase it because
+    // OpenAI's docs show it that way and several downstream log tools
+    // canonicalise on the documented spelling.
+    expect(sent.headers['X-Request-ID']).toBe(
+      'corr-openai-trace-stamped-XYZ',
+    );
+    // Must NOT leak into URL or body.
+    expect(sent.url).not.toContain('corr-openai-trace-stamped-XYZ');
+    expect(sent.body ?? '').not.toContain('corr-openai-trace-stamped-XYZ');
+  });
+
+  it('ping() omits the X-Request-ID header — pings have no router-owned correlationId', async () => {
+    const http = fakeHttp(jsonResponse(200, successBody()));
+    const provider = createOpenAIProvider({
+      http: http.fn,
+      timeoutSignal: neverTimeout,
+    });
+    const res = await provider.ping({ apiKey: KEY });
+    expect(res.ok).toBe(true);
+
+    const sent = http.received[0]!;
+    // `ProviderPingInput` is intentionally not plumbed with a
+    // correlation id (see `provider.ts` JSDoc); the header must be
+    // absent — never empty-string, never `undefined`.
+    expect(
+      Object.prototype.hasOwnProperty.call(sent.headers, 'X-Request-ID'),
+    ).toBe(false);
   });
 });
 

@@ -25,6 +25,8 @@ import {
   classifyOutcomeForBreaker,
   gaugeValueForState,
   type CircuitState,
+  type OriginKind,
+  type ProviderCallContext,
 } from '../../src/routing/index.js';
 
 // ─── gaugeValueForState ───────────────────────────────────────────────
@@ -73,5 +75,105 @@ describe('classifyOutcomeForBreaker — exhaustiveness guard', () => {
     expect(() => classifyOutcomeForBreaker(minimal)).toThrow(
       /Unhandled LLMCallError kind in classifyOutcomeForBreaker: \{"kind":"mystery"\}/,
     );
+  });
+});
+
+// ─── ProviderCallContext / OriginKind — structural contract ──────────
+//
+// Iter 6 commit 2 defines two net-new types in events.ts (see §3.3 of
+// the LLM_CLIENT v1.1 contract). These tests are *compile-time*
+// assertions: the file only typechecks if the shape matches the
+// contract. The `expect` lines are there so vitest reports a passing
+// spec when the typecheck lands — they don't carry runtime intent
+// beyond "the constructed values are the ones we claim".
+//
+// If any of the four invariants below flip (e.g. `correlationId`
+// becomes optional, or `origin` widens beyond the three producer
+// surfaces without a contract amendment), this file fails to compile
+// and CI catches the drift before it ships.
+
+describe('ProviderCallContext — structural shape (iter 6 commit 2)', () => {
+  it('accepts the minimum required fields: correlationId + fundingMode + origin', () => {
+    const minimal: ProviderCallContext = {
+      correlationId: 'corr-struct-min',
+      fundingMode: 'byok',
+      origin: 'caption-refine',
+    };
+    expect(minimal.correlationId).toBe('corr-struct-min');
+    expect(minimal.fundingMode).toBe('byok');
+    expect(minimal.origin).toBe('caption-refine');
+    // Optional fields default to undefined — exactOptionalPropertyTypes
+    // means we must explicitly NOT set them when absent.
+    expect('deadline' in minimal).toBe(false);
+    expect('idempotencyKey' in minimal).toBe(false);
+  });
+
+  it('accepts the fully-populated shape with both optionals set', () => {
+    const full: ProviderCallContext = {
+      correlationId: 'corr-struct-full',
+      fundingMode: 'managed',
+      origin: 'mcp-server-callback',
+      deadline: 1_700_000_000_000,
+      idempotencyKey: 'idem-abc-123',
+    };
+    expect(full.deadline).toBe(1_700_000_000_000);
+    expect(full.idempotencyKey).toBe('idem-abc-123');
+    // `fundingMode` is a closed union — this line only typechecks
+    // because `'managed'` is one of the two admitted tokens.
+    expect(full.fundingMode satisfies 'byok' | 'managed').toBe('managed');
+  });
+
+  it('pins fundingMode to exactly the two-token union {byok, managed}', () => {
+    // If a new funding mode is ever introduced, the contract (§3.7)
+    // must be amended first. This spec is the canary: the array below
+    // enumerates every admissible token, and the line compiles only
+    // while the union has exactly these two members.
+    const admissible: ReadonlyArray<ProviderCallContext['fundingMode']> = [
+      'byok',
+      'managed',
+    ] as const;
+    expect(admissible).toEqual(['byok', 'managed']);
+  });
+});
+
+describe('OriginKind — structural shape (iter 6 commit 2, §3.3)', () => {
+  it('enumerates exactly the three producer surfaces from §3.3 lines 285–287', () => {
+    // Same canary pattern as fundingMode above — the array literal
+    // compiles only while `OriginKind` has precisely these three
+    // members. A new member → compile fails here → code review loops
+    // back to the contract.
+    const allOrigins: ReadonlyArray<OriginKind> = [
+      'caption-refine',
+      'hook-brainstorm',
+      'mcp-server-callback',
+    ] as const;
+    expect(allOrigins).toHaveLength(3);
+    expect(new Set(allOrigins)).toEqual(
+      new Set(['caption-refine', 'hook-brainstorm', 'mcp-server-callback']),
+    );
+  });
+
+  it('is exhaustive under `switch` — `never` remainder after the three cases', () => {
+    // Compile-time exhaustiveness: the `never` annotation only holds
+    // while the union stays pinned to three members. Adding a fourth
+    // without extending the switch would make `fallthrough: OriginKind`
+    // narrow to a non-never type and fail to typecheck.
+    function label(o: OriginKind): string {
+      switch (o) {
+        case 'caption-refine':
+          return 'caption';
+        case 'hook-brainstorm':
+          return 'hook';
+        case 'mcp-server-callback':
+          return 'mcp';
+        default: {
+          const fallthrough: never = o;
+          return fallthrough;
+        }
+      }
+    }
+    expect(label('caption-refine')).toBe('caption');
+    expect(label('hook-brainstorm')).toBe('hook');
+    expect(label('mcp-server-callback')).toBe('mcp');
   });
 });

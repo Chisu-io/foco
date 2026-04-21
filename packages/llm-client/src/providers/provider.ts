@@ -45,10 +45,39 @@ export type ProviderName = 'anthropic' | 'openai' | 'gemini';
  * `LLMCallInput` (§3.3) on purpose — adapters do NOT need to know
  * the plan, funding mode, exposure scope or idempotency key; those
  * are routing concerns.
+ *
+ * **Iter 6 commit 2 addition (P11 of the iter 6 design doc):**
+ * `correlationId` is the ONLY routing-context field that crosses the
+ * adapter boundary. Adapters use it to:
+ *
+ *  1. Stamp the proveedor's trace header (Anthropic
+ *     `anthropic-trace-id`, OpenAI `X-Request-ID`; Gemini has no
+ *     standard trace-header — the field is accepted but no header is
+ *     emitted, see `gemini.ts`).
+ *  2. (Iter 6 commit 3) Open a provider sub-span linked to the
+ *     router's root span via this same correlation id.
+ *
+ * The full routing context lives in
+ * `ProviderCallContext` in `../routing/events.ts` — `fundingMode`,
+ * `origin`, `deadline`, `idempotencyKey` stay routing-internal and do
+ * NOT reach the adapter.
  */
 export interface ProviderCallInput {
   readonly apiKey: string;
   readonly request: NormalizedLLMRequest;
+  /**
+   * Trace / correlation ID for this single call. Flows into the
+   * proveedor's trace header (where supported) and into the provider
+   * sub-span created by the router in iter 6 commit 3. Adapters MUST
+   * NOT generate one themselves — the router owns identity so that
+   * one call has one id everywhere.
+   *
+   * **Required** as of iter 6 commit 2 (P11). Adapters that need to
+   * call the proveedor outside the router (e.g. `Provider.ping`,
+   * which uses `ProviderPingInput` and is intentionally NOT plumbed)
+   * skip the trace header.
+   */
+  readonly correlationId: string;
   /**
    * Caller's abort signal. Adapters wire this into their HTTP
    * client so that deadlines + cancellations reach the socket. A
