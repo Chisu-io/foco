@@ -30,10 +30,18 @@
  */
 
 import type { KMSClient } from '@aws-sdk/client-kms';
+import {
+  SpanKind,
+  SpanStatusCode,
+  context,
+  trace,
+} from '@opentelemetry/api';
 
 import type { LLMCallError } from '../errors/taxonomy.js';
 import { make } from '../errors/taxonomy.js';
 import type { Metrics } from '../observability/metrics.js';
+import { getTracer } from '../observability/tracing.js';
+import type { ProviderName } from '../providers/provider.js';
 import { err, ok, type Result } from '../types.js';
 import {
   decryptWithDek,
@@ -109,6 +117,21 @@ export interface UnwrapInput {
   readonly userId: string;
   readonly envelope: Envelope;
   readonly deadlineMs?: number | undefined;
+  /**
+   * Provider to which this envelope's plaintext API key belongs.
+   * Required so the `llm.kms.decrypt_dek` sub-span (§10.1, signed
+   * 2026-04-18) can stamp `llm.provider` without re-introducing
+   * routing inside the crypto module. The caller (plan-router / BYOK
+   * resolver) always resolves the provider before asking for a DEK —
+   * propagating it through the API is cheaper than re-deriving it
+   * here.
+   *
+   * Type-level gate: a future concrete BYOK resolver that forgets to
+   * pass `provider` will fail typecheck. That is the enforcement
+   * commit 4 relies on; no runtime call-site exists in `src/` yet
+   * (iter 7 facade or a dedicated `BYOKKeystore` commit).
+   */
+  readonly provider: ProviderName;
 }
 
 interface CacheEntry {
@@ -255,11 +278,60 @@ export class EnvelopeCrypto {
         input.deadlineMs === undefined
           ? {}
           : { deadlineMs: input.deadlineMs };
-      const decrypted = await kmsDecrypt(
-        this.kmsDeps,
-        { alias, ciphertext: envelope.dekCiphertext },
-        kmsOpts,
-      );
+
+      // §10.1 sub-span: `llm.kms.decrypt_dek`.
+      // Emitted ONLY on cache-miss (§8 decisión #2 del mini-spec
+      // `iter6-otel-correlation-design.md` — cache-hit no emite).
+      // Patrón manual (NO `withSpan`): `kmsDecrypt` devuelve
+      // `Result<_, LLMCallError>`, no throw. `withSpan` auto-estamparía
+      // `SpanStatusCode.OK` en el return y pisaría el `ERROR` manual
+      // que debe quedar en el branch `Result.err` (viola R3 del
+      // mini-spec). `LLMCallError` es tagged union, no `Error` — así
+      // que NO llamamos `recordException` sobre el Result.err (el
+      // stack no pertenece al error real). Mismo patrón aplicado en
+      // `plan-router.ts` líneas 635-708 (commit 3, `stampRootSpanClose`).
+      //
+      // Contexto activo: `context.with(trace.setSpan(..., kmsSpan), fn)`
+      // propaga el parent en producción (donde el host instala
+      // `AsyncHooksContextManager`). Los hermetic tests de este package
+      // no instalan el context manager, así que aserten presencia del
+      // span + atributos + count, no `parentSpanId`. Mismo criterio que
+      // commit 3 (ver plan-router.ts líneas 674-677).
+      const tracer = getTracer();
+      const kmsSpan = tracer.startSpan('llm.kms.decrypt_dek', {
+        kind: SpanKind.CLIENT,
+        attributes: {
+          'llm.provider': input.provider,
+          'kek.version': envelope.kekVersion,
+          'kek.shard_id': envelope.shardId,
+        },
+      });
+
+      let decrypted: Result<Uint8Array, LLMCallError>;
+      try {
+        decrypted = await context.with(
+          trace.setSpan(context.active(), kmsSpan),
+          () =>
+            kmsDecrypt(
+              this.kmsDeps,
+              { alias, ciphertext: envelope.dekCiphertext },
+              kmsOpts,
+            ),
+        );
+        if (decrypted.ok) {
+          kmsSpan.setStatus({ code: SpanStatusCode.OK });
+        } else {
+          // R3: `LLMCallError` es tagged union, no `Error`.
+          // NO llamar `recordException` — mentiría sobre el stack.
+          kmsSpan.setStatus({
+            code: SpanStatusCode.ERROR,
+            message: decrypted.error.kind,
+          });
+        }
+      } finally {
+        kmsSpan.end();
+      }
+
       if (!decrypted.ok) return err(decrypted.error);
 
       // Copy so the cache owns the Buffer lifecycle.

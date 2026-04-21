@@ -5,6 +5,12 @@ import {
   KMSClient,
 } from '@aws-sdk/client-kms';
 import { mockClient } from 'aws-sdk-client-mock';
+import { SpanKind, SpanStatusCode } from '@opentelemetry/api';
+import {
+  BasicTracerProvider,
+  InMemorySpanExporter,
+  SimpleSpanProcessor,
+} from '@opentelemetry/sdk-trace-base';
 
 import {
   EnvelopeCrypto,
@@ -16,6 +22,7 @@ import { generateDek, zeroize } from '../../src/crypto/dek.js';
 import { kekAlias } from '../../src/crypto/kek.js';
 import { shardId } from '../../src/crypto/sharding.js';
 import { InMemoryMetrics } from '../../src/observability/metrics.js';
+import { resetTracer, setTracer } from '../../src/observability/tracing.js';
 
 const kmsMock = mockClient(KMSClient);
 
@@ -196,7 +203,7 @@ describe('EnvelopeCrypto.unwrap', () => {
     kmsMock.on(DecryptCommand).resolves({ Plaintext: new Uint8Array(dek) });
 
     const { env, metrics } = makeEnvCrypto();
-    const res = await env.unwrap({ userId, envelope });
+    const res = await env.unwrap({ userId, envelope, provider: 'anthropic' });
 
     expect(res.ok).toBe(true);
     if (res.ok) expect(res.value.equals(key)).toBe(true);
@@ -216,9 +223,9 @@ describe('EnvelopeCrypto.unwrap', () => {
     kmsMock.on(DecryptCommand).resolves({ Plaintext: new Uint8Array(dek) });
 
     const { env, metrics } = makeEnvCrypto();
-    await env.unwrap({ userId, envelope });
-    await env.unwrap({ userId, envelope });
-    await env.unwrap({ userId, envelope });
+    await env.unwrap({ userId, envelope, provider: 'anthropic' });
+    await env.unwrap({ userId, envelope, provider: 'anthropic' });
+    await env.unwrap({ userId, envelope, provider: 'anthropic' });
 
     // `as never` cast: aws-sdk-client-mock@4.1 types `commandCalls`
     // for an older SDK constructor signature (`new(input: TInput |
@@ -248,10 +255,10 @@ describe('EnvelopeCrypto.unwrap', () => {
       .callsFake(() => ({ Plaintext: new Uint8Array(dek) }));
 
     const { env, metrics, clock } = makeEnvCrypto({ cacheTtlMs: 1_000 });
-    await env.unwrap({ userId, envelope });
+    await env.unwrap({ userId, envelope, provider: 'anthropic' });
     // Advance past TTL.
     clock.t += 2_000;
-    const res = await env.unwrap({ userId, envelope });
+    const res = await env.unwrap({ userId, envelope, provider: 'anthropic' });
     expect(res.ok).toBe(true);
 
     expect(kmsMock.commandCalls(DecryptCommand as never).length).toBe(2);
@@ -271,7 +278,7 @@ describe('EnvelopeCrypto.unwrap', () => {
     kmsMock.on(DecryptCommand).resolves({ Plaintext: new Uint8Array(dek) });
 
     const { env, metrics, clock } = makeEnvCrypto({ cacheTtlMs: 500 });
-    await env.unwrap({ userId, envelope });
+    await env.unwrap({ userId, envelope, provider: 'anthropic' });
     clock.t += 1_000;
     const removed = env.sweepExpired();
     expect(removed).toBe(1);
@@ -308,10 +315,10 @@ describe('EnvelopeCrypto.unwrap', () => {
 
     const { env, metrics } = makeEnvCrypto();
     // Prime v1.
-    const r1 = await env.unwrap({ userId, envelope: v1env });
+    const r1 = await env.unwrap({ userId, envelope: v1env, provider: 'anthropic' });
     expect(r1.ok).toBe(true);
     // Now unwrap v2 — triggers stale detection for the v1 entry.
-    const r2 = await env.unwrap({ userId, envelope: v2 });
+    const r2 = await env.unwrap({ userId, envelope: v2, provider: 'anthropic' });
     expect(r2.ok).toBe(true);
 
     expect(
@@ -334,7 +341,7 @@ describe('EnvelopeCrypto.unwrap', () => {
     kmsMock.on(DecryptCommand).resolves({ Plaintext: new Uint8Array(v1dek) });
 
     const { env, metrics } = makeEnvCrypto();
-    await env.unwrap({ userId, envelope: v1env });
+    await env.unwrap({ userId, envelope: v1env, provider: 'anthropic' });
     expect(env.size).toBe(1);
 
     const removed = env.invalidateUserKey(userId);
@@ -365,8 +372,8 @@ describe('EnvelopeCrypto.unwrap', () => {
     });
 
     const { env } = makeEnvCrypto();
-    await env.unwrap({ userId: 'alice', envelope: eA });
-    await env.unwrap({ userId: 'bob', envelope: eB });
+    await env.unwrap({ userId: 'alice', envelope: eA, provider: 'anthropic' });
+    await env.unwrap({ userId: 'bob', envelope: eB, provider: 'anthropic' });
     expect(env.size).toBe(2);
 
     const removed = env.invalidateUserKey('alice');
@@ -391,7 +398,7 @@ describe('EnvelopeCrypto.unwrap', () => {
     };
 
     const { env } = makeEnvCrypto();
-    const res = await env.unwrap({ userId, envelope: tampered });
+    const res = await env.unwrap({ userId, envelope: tampered, provider: 'anthropic' });
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.error.kind).toBe('internal');
   });
@@ -408,7 +415,7 @@ describe('EnvelopeCrypto.unwrap', () => {
     );
 
     const { env } = makeEnvCrypto();
-    const res = await env.unwrap({ userId, envelope });
+    const res = await env.unwrap({ userId, envelope, provider: 'anthropic' });
     expect(res.ok).toBe(false);
     expect(env.size).toBe(0);
   });
@@ -420,7 +427,7 @@ describe('EnvelopeCrypto.unwrap', () => {
       keyPlaintext: Buffer.from('k'),
       kekVersion: 1,
     });
-    const res = await env.unwrap({ userId: '', envelope });
+    const res = await env.unwrap({ userId: '', envelope, provider: 'anthropic' });
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.error.kind).toBe('internal');
   });
@@ -448,11 +455,181 @@ describe('EnvelopeCrypto.unwrap', () => {
     const unwrapped = await env.unwrap({
       userId: 'user-1',
       envelope: wrapped.value,
+      provider: 'anthropic',
     });
     expect(unwrapped.ok).toBe(true);
     if (unwrapped.ok) {
       expect(unwrapped.value.equals(plaintext)).toBe(true);
       zeroize(unwrapped.value);
     }
+  });
+});
+
+/**
+ * §10.1 — sub-span `llm.kms.decrypt_dek`.
+ *
+ * Emitted ONLY on cache-miss (§8 decisión #2 firmada del mini-spec
+ * `iter6-otel-correlation-design.md`). Cache-hit NO emite el span.
+ *
+ * Hermetic scaffold: `BasicTracerProvider` + `SimpleSpanProcessor` +
+ * `InMemorySpanExporter` montado vía el DI seam `setTracer/resetTracer`
+ * (mismo patrón que commit 3 para `plan-router.ts`). Sin
+ * `AsyncHooksContextManager` → aserts son sobre presencia del span,
+ * atributos y count; NO sobre `parentSpanId`.
+ */
+describe('EnvelopeCrypto.unwrap — OTel `llm.kms.decrypt_dek` span (iter 6 commit 4, §10.1)', () => {
+  let exporter: InMemorySpanExporter;
+  let tracerProvider: BasicTracerProvider;
+
+  beforeEach(() => {
+    exporter = new InMemorySpanExporter();
+    tracerProvider = new BasicTracerProvider({
+      spanProcessors: [new SimpleSpanProcessor(exporter)],
+    });
+    setTracer(tracerProvider.getTracer('envelope-test'));
+  });
+
+  afterEach(async () => {
+    resetTracer();
+    exporter.reset();
+    await tracerProvider.shutdown();
+  });
+
+  it('cache-miss emite span con los 3 attrs + SpanKind.CLIENT + OK', async () => {
+    const userId = 'u-obs-1';
+    const { envelope, dek } = await buildEnvelope({
+      userId,
+      keyPlaintext: Buffer.from('sk-anth'),
+      kekVersion: 1,
+    });
+    kmsMock.on(DecryptCommand).resolves({ Plaintext: new Uint8Array(dek) });
+
+    const { env } = makeEnvCrypto();
+    const res = await env.unwrap({ userId, envelope, provider: 'anthropic' });
+    expect(res.ok).toBe(true);
+
+    const spans = exporter
+      .getFinishedSpans()
+      .filter((s) => s.name === 'llm.kms.decrypt_dek');
+    expect(spans).toHaveLength(1);
+    const span = spans[0]!;
+    expect(span.kind).toBe(SpanKind.CLIENT);
+    expect(span.attributes).toEqual({
+      'llm.provider': 'anthropic',
+      'kek.version': 1,
+      'kek.shard_id': envelope.shardId,
+    });
+    expect(span.status.code).toBe(SpanStatusCode.OK);
+    expect(span.events).toHaveLength(0);
+  });
+
+  it('cache-hit NO emite span (§8 decisión #2 firmada)', async () => {
+    const userId = 'u-obs-2';
+    const { envelope, dek } = await buildEnvelope({
+      userId,
+      keyPlaintext: Buffer.from('sk-anth'),
+      kekVersion: 1,
+    });
+    kmsMock.on(DecryptCommand).resolves({ Plaintext: new Uint8Array(dek) });
+
+    const { env } = makeEnvCrypto();
+    // Primer unwrap → cache-miss → debe emitir.
+    await env.unwrap({ userId, envelope, provider: 'anthropic' });
+    // Reset exporter antes del segundo → aislar el assert al cache-hit.
+    exporter.reset();
+    // Segundo unwrap misma `(userId, kekVersion)` → cache-hit → NO emite.
+    const res = await env.unwrap({ userId, envelope, provider: 'anthropic' });
+    expect(res.ok).toBe(true);
+
+    const spans = exporter
+      .getFinishedSpans()
+      .filter((s) => s.name === 'llm.kms.decrypt_dek');
+    expect(spans).toHaveLength(0);
+  });
+
+  it('KMS error → ERROR con message=kind, sin recordException (R3)', async () => {
+    const userId = 'u-obs-3';
+    const { envelope } = await buildEnvelope({
+      userId,
+      keyPlaintext: Buffer.from('sk-anth'),
+      kekVersion: 1,
+    });
+    kmsMock.on(DecryptCommand).rejects(
+      Object.assign(new Error('denied'), { name: 'AccessDeniedException' }),
+    );
+
+    const { env } = makeEnvCrypto();
+    const res = await env.unwrap({ userId, envelope, provider: 'openai' });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error.kind).toBe('kms_unavailable');
+
+    const spans = exporter
+      .getFinishedSpans()
+      .filter((s) => s.name === 'llm.kms.decrypt_dek');
+    expect(spans).toHaveLength(1);
+    const span = spans[0]!;
+    expect(span.status.code).toBe(SpanStatusCode.ERROR);
+    // R1: el `message` del status debe ser exactamente el `kind` del
+    // error, no una cadena libre derivada.
+    expect(span.status.message).toBe('kms_unavailable');
+    // R3: `LLMCallError` es tagged union → NO llamar `recordException`.
+    // `recordException` añadiría un event `exception`; asertamos que no
+    // se emitió ningún event.
+    expect(span.events).toHaveLength(0);
+    // Coherencia: el provider pasado a `unwrap` se estampó aunque la
+    // llamada fallara.
+    expect(span.attributes['llm.provider']).toBe('openai');
+  });
+
+  it('attrs del span nunca filtran userId crudo, alias, ciphertext ni api key', async () => {
+    const rawUserId = 'u-raw-should-not-appear';
+    const rawKey = 'sk-ant-should-never-leak-abc123';
+    const { envelope, dek } = await buildEnvelope({
+      userId: rawUserId,
+      keyPlaintext: Buffer.from(rawKey),
+      kekVersion: 1,
+    });
+    kmsMock.on(DecryptCommand).resolves({ Plaintext: new Uint8Array(dek) });
+
+    const { env } = makeEnvCrypto();
+    await env.unwrap({ userId: rawUserId, envelope, provider: 'gemini' });
+
+    const spans = exporter
+      .getFinishedSpans()
+      .filter((s) => s.name === 'llm.kms.decrypt_dek');
+    expect(spans).toHaveLength(1);
+    const span = spans[0]!;
+
+    // Claves EXACTAS de §10.1 — ni una más, ni una menos.
+    expect(Object.keys(span.attributes).sort()).toEqual([
+      'kek.shard_id',
+      'kek.version',
+      'llm.provider',
+    ]);
+
+    // El alias y el ciphertext jamás pueden filtrarse.
+    const alias = kekAlias({
+      kekVersion: envelope.kekVersion,
+      shardId: envelope.shardId,
+    });
+    const haystack = Object.values(span.attributes)
+      .map((v) => (typeof v === 'string' ? v : String(v)))
+      .join('|');
+    expect(haystack).not.toContain(rawUserId);
+    expect(haystack).not.toContain(rawKey);
+    expect(haystack).not.toContain(alias);
+    // `dekCiphertext` es Uint8Array — representación string no debe
+    // aparecer en atributos.
+    expect(haystack).not.toContain(Array.from(envelope.dekCiphertext).join(','));
+    // No hay campo `llm.api_key` ni `llm.key_ciphertext` (§10.1
+    // prohibited set).
+    expect(span.attributes['llm.api_key']).toBeUndefined();
+    expect(span.attributes['llm.key_ciphertext']).toBeUndefined();
+    // No hay campo `alias` o `ciphertext` crudo.
+    expect(span.attributes['alias']).toBeUndefined();
+    expect(span.attributes['ciphertext']).toBeUndefined();
+    expect(span.attributes['user.id']).toBeUndefined();
+    // Sanity: el provider pasado sí está estampado.
+    expect(span.attributes['llm.provider']).toBe('gemini');
   });
 });
