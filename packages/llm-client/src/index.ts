@@ -27,11 +27,21 @@
  * Iteration 6 scope: OTel correlation + deadline propagation.
  * Iteration 7 scope (in progress): token accounting + consent modes.
  *   Commit 1 realigned `OriginKind` to contract §3.3 (5 signed values).
- *   Commit 2 (this) introduces the `ConsentResolver` DI seam +
+ *   Commit 2 introduced the `ConsentResolver` DI seam +
  *   `UserLLMKeyRepo` interface + `llm_consent_mode_resolved_total`
- *   counter. No router wiring yet — that lands in commit 4 after the
- *   `UsageRecorder` ships in commit 3. See §8 of LLM_CLIENT.md v1.1
- *   and `.cmsgs/iter7-accounting-design.md`.
+ *   counter.
+ *   Commit 3 (this) adds the `UsageRecorder` writer seam + in-memory
+ *   FIFO `UsageBuffer` (capacity 1000, §8 decisión #2) + full
+ *   SHA-256-hex `prompt-hash` canonicaliser (§8 decisión #1) +
+ *   `llm.accounting.write` sub-span (§5.3) + 4 new metrics
+ *   (`llm_accounting_writes_total{consent_mode,funding_mode,result}`,
+ *   `llm_accounting_writes_failed_total{reason}`,
+ *   `llm_accounting_writes_dropped_total{reason}`,
+ *   `llm_accounting_buffer_size`). No router wiring yet — that
+ *   lands in commit 4 which plumbs both seams into
+ *   `plan-router.route()` per §4.2's billable-vs-pre-call matrix.
+ *   See §8 of LLM_CLIENT.md v1.1 and
+ *   `.cmsgs/iter7-accounting-design.md`.
  *
  * The `LLMClient.call()` surface (orchestrator, latency, idempotency)
  * lands in Iteration 8 of the implementation plan.

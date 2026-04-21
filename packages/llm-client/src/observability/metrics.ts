@@ -33,11 +33,13 @@
  *   llm_consent_mode_resolved_total{mode, source}                counter
  *      mode ∈ {full,minimal}
  *      source ∈ {cache,repo,default_on_failure}
- *
- *   More accounting metrics (`llm_accounting_writes_total`,
- *   `llm_accounting_writes_failed_total`,
- *   `llm_accounting_writes_dropped_total`,
- *   `llm_accounting_buffer_size`) land in iter 7 commit 3.
+ *   llm_accounting_writes_total{consent_mode, funding_mode, result} counter
+ *      result ∈ {ok,buffered,dropped}
+ *   llm_accounting_writes_failed_total{reason}                   counter
+ *      reason ∈ {db_down,timeout,network,serialization}
+ *   llm_accounting_writes_dropped_total{reason}                  counter
+ *      reason ∈ {buffer_full}  (fires Grafana P1 alert)
+ *   llm_accounting_buffer_size                                   gauge
  *
  * Non-PII invariant (§10.2 + §5.2 of the accounting design doc):
  * dimensions on every metric MUST be categorical. Never `user_id`,
