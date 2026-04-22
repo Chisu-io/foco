@@ -64,6 +64,10 @@
     "./types": {
       "types": "./src/types/index.ts",
       "import": "./src/types/index.ts"
+    },
+    "./idempotency": {
+      "types": "./src/idempotency/index.ts",
+      "import": "./src/idempotency/index.ts"
     }
   },
   "publishConfig": {
@@ -105,6 +109,10 @@
       "./types": {
         "types": "./dist/types/index.d.ts",
         "import": "./dist/types/index.js"
+      },
+      "./idempotency": {
+        "types": "./dist/idempotency/index.d.ts",
+        "import": "./dist/idempotency/index.js"
       }
     }
   },
