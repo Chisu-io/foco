@@ -852,17 +852,43 @@ export function createPlanRouter(deps: PlanRouterDeps): PlanRouter {
     // `trace.idempotency_key_hash` is deliberately omitted in commit 3
     // (R2 of the mini-spec); the iter 8 client facade owns it because
     // `RouteInput` does not carry an idempotency key.
+    //
+    // Iter 8 forward-compat (signed Jean+Claude 2026-04-21): when a
+    // caller (the `LLMClient` facade of iter 8 commit 3) already opened
+    // the `llm.client.call` root span and made it the active span, we
+    // reuse it instead of opening a sibling. This keeps §10.1's
+    // "one span per `.call()`" invariant satisfied whether the router
+    // is driven by the facade OR by a standalone caller (router tests,
+    // legacy callers, iter 6 hermetic specs). Attributes and end-of-span
+    // lifecycle are split by ownership:
+    //   - Open attributes (`llm.origin`, `user.id_hash`) are stamped
+    //     by whoever opened the span. If the router opened it
+    //     (`ownsRootSpan === true`), we stamp them in the `startSpan`
+    //     attributes bag below. If the facade opened it, the facade
+    //     already stamped them (plus the facade-owned `llm.model` and
+    //     `trace.idempotency_key_hash`) — we do NOT duplicate.
+    //   - Close attributes (the 7 of §10.1) are ALWAYS stamped by the
+    //     router via `stampRootSpanClose`, regardless of ownership. The
+    //     router is the authoritative source for them (circuit state,
+    //     provider chosen after fallback, etc.).
+    //   - `rootSpan.end()` fires ONLY when `ownsRootSpan === true`. If
+    //     the facade owns the span, the facade ends it in its finally.
     const tracer = getTracer();
     const startHrMs = performance.now();
     const requiredProvider = providerForModel(input.request.model);
 
-    const rootSpan = tracer.startSpan('llm.client.call', {
-      kind: SpanKind.CLIENT,
-      attributes: {
-        'llm.origin': input.origin,
-        'user.id_hash': hashUserId(input.user.userId),
-      },
-    });
+    const activeSpan = trace.getActiveSpan();
+    const rootSpan: Span =
+      activeSpan !== undefined && activeSpan.isRecording()
+        ? activeSpan
+        : tracer.startSpan('llm.client.call', {
+            kind: SpanKind.CLIENT,
+            attributes: {
+              'llm.origin': input.origin,
+              'user.id_hash': hashUserId(input.user.userId),
+            },
+          });
+    const ownsRootSpan = rootSpan !== activeSpan;
 
     // Iter 7 commit 4: kick off consent resolution BEFORE entering
     // `context.with(...)` so the async repo read overlaps with the
@@ -941,7 +967,13 @@ export function createPlanRouter(deps: PlanRouterDeps): PlanRouter {
       stampRootSpanClose(rootSpan, result, requiredProvider, latencyMs);
       return result;
     } finally {
-      rootSpan.end();
+      // Iter 8 forward-compat: only end the span when the router opened
+      // it. If the facade passed us an active span, the facade ends it
+      // in its own finally (it paid for the open, it pays for the
+      // close — avoids double-end on the same span).
+      if (ownsRootSpan) {
+        rootSpan.end();
+      }
     }
   }
 

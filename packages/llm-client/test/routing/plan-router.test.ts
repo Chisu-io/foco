@@ -36,7 +36,14 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { SpanKind, SpanStatusCode } from '@opentelemetry/api';
+import {
+  context,
+  ROOT_CONTEXT,
+  SpanKind,
+  SpanStatusCode,
+  trace,
+  type Context,
+} from '@opentelemetry/api';
 import {
   BasicTracerProvider,
   InMemorySpanExporter,
@@ -1830,6 +1837,207 @@ describe('PlanRouter — OTel spans (iter 6 commit 3, §10.1)', () => {
     // No-op tracer does not feed our exporter — the contract is
     // "withSpan / startSpan must not throw without an SDK".
     expect(exporter.getFinishedSpans()).toHaveLength(0);
+  });
+
+  // ─── iter 8 forward-compat (signed 2026-04-21) ───────────────────
+  //
+  // The `LLMClient` facade of iter 8 commit 3 owns the `llm.client.call`
+  // root span. When it calls `router.route(...)` the facade has already
+  // made that span active via `tracer.startActiveSpan(...)`, so the
+  // router must reuse it — NOT open a sibling. The two specs below
+  // lock that behaviour:
+  //   1. `trace.getActiveSpan()` recording → router reuses it
+  //      (exactly one span named `llm.client.call`, with close-time
+  //      attributes stamped by the router).
+  //   2. When reusing, the router must NOT call `.end()` — ownership
+  //      stays with the caller (the facade will end it in its own
+  //      `finally`).
+  // Standalone behaviour (the 670 specs above) is preserved because
+  // they run WITHOUT a global context manager installed — in that
+  // regime `context.with(ctx, fn)` is a no-op and
+  // `trace.getActiveSpan()` returns `undefined`, so the router's
+  // `startSpan` fallback keeps firing exactly as before. No test here
+  // needs to reassert that; the rest of this describe block already
+  // covers it.
+  //
+  // Nested describe block below: installs a synchronous-only stack
+  // `ContextManager` scoped to just these two specs, enabling real
+  // `trace.getActiveSpan()` propagation through `context.with(...)`.
+  // It does NOT persist across `await` boundaries — but the router
+  // calls `trace.getActiveSpan()` synchronously in the prelude of
+  // `route()`, before any `await`, so a single-tick stack manager is
+  // sufficient. `afterEach` disables it to prevent bleed-through.
+
+  describe('iter 8 forward-compat (facade parity)', () => {
+    class StackContextManager {
+      private _stack: Context[] = [];
+      active(): Context {
+        return this._stack[this._stack.length - 1] ?? ROOT_CONTEXT;
+      }
+      with<A extends unknown[], F extends (...args: A) => ReturnType<F>>(
+        ctx: Context,
+        fn: F,
+        thisArg?: ThisParameterType<F>,
+        ...args: A
+      ): ReturnType<F> {
+        this._stack.push(ctx);
+        try {
+          return fn.call(thisArg as ThisParameterType<F>, ...args);
+        } finally {
+          this._stack.pop();
+        }
+      }
+      bind<T>(_ctx: Context, target: T): T {
+        return target;
+      }
+      enable(): this {
+        return this;
+      }
+      disable(): this {
+        this._stack = [];
+        return this;
+      }
+    }
+
+    beforeEach(() => {
+      context.setGlobalContextManager(new StackContextManager());
+    });
+    afterEach(() => {
+      context.disable();
+    });
+
+  it('forward-compat — reuses active span as root when caller already opened one (facade parity)', async () => {
+    // Arrange — the "facade" opens and activates its own root span.
+    const facadeTracer = tracerProvider.getTracer('facade-test');
+    const callerSpan = facadeTracer.startSpan('llm.client.call', {
+      kind: SpanKind.CLIENT,
+      attributes: {
+        'llm.origin': 'caption-refine',
+        'user.id_hash': hashUserId('u-fwd-1'),
+        // Facade-only attribute (R2 — router never stamps this):
+        'trace.idempotency_key_hash':
+          'f'.repeat(64),
+      },
+    });
+
+    resolver.enqueueByokSuccess('sk-fwd-1', 'anthropic');
+    provider.enqueueSuccess({
+      modelUsed: 'claude-sonnet-4-6',
+      providerUsed: 'anthropic',
+    });
+
+    // Act — run route() with callerSpan active. The router must pick
+    // it up via `trace.getActiveSpan()` instead of opening its own.
+    const res = await context.with(
+      trace.setSpan(context.active(), callerSpan),
+      () =>
+        routeWith({
+          user: {
+            userId: 'u-fwd-1',
+            plan: 'free',
+            llmKeyProvider: 'anthropic',
+            llmKeyStatus: 'active',
+          },
+          request: baseRequest(),
+          correlationId: DEFAULT_CORR_ID,
+          origin: DEFAULT_ORIGIN,
+        }),
+    );
+    expect(res.ok).toBe(true);
+
+    // While the caller still owns the span (not yet ended), the
+    // exporter has NOT emitted it. Only the sub-span from the router
+    // has finished.
+    const finishedBeforeEnd = exporter.getFinishedSpans();
+    expect(
+      finishedBeforeEnd.filter((s) => s.name === 'llm.client.call'),
+    ).toHaveLength(0);
+
+    // The "facade" now ends the span.
+    callerSpan.end();
+
+    const spans = exporter.getFinishedSpans();
+    const rootSpans = spans.filter((s) => s.name === 'llm.client.call');
+    // Exactly ONE root span named `llm.client.call` — the one the
+    // caller opened. If the router had opened a sibling we would see
+    // two here.
+    expect(rootSpans).toHaveLength(1);
+
+    const rootSpan = rootSpans[0]!;
+    // Open-time attrs (stamped by the caller) preserved.
+    expect(rootSpan.attributes['llm.origin']).toBe('caption-refine');
+    expect(rootSpan.attributes['user.id_hash']).toBe(hashUserId('u-fwd-1'));
+    expect(rootSpan.attributes['trace.idempotency_key_hash']).toBe(
+      'f'.repeat(64),
+    );
+
+    // Close-time attrs (stamped by the router onto the shared span).
+    expect(rootSpan.attributes['llm.provider']).toBe('anthropic');
+    expect(rootSpan.attributes['llm.model']).toBe('claude-sonnet-4-6');
+    expect(rootSpan.attributes['llm.input_tokens']).toBe(10);
+    expect(rootSpan.attributes['llm.output_tokens']).toBe(4);
+    expect(rootSpan.attributes['llm.funding_mode']).toBe('byok');
+    expect(rootSpan.attributes['llm.circuit_state']).toBe('closed');
+    expect(typeof rootSpan.attributes['llm.latency_ms']).toBe('number');
+    expect(rootSpan.status.code).toBe(SpanStatusCode.OK);
+  });
+
+  it('forward-compat — does NOT end the reused span (caller keeps ownership)', async () => {
+    // Arrange — open a caller span and track whether anyone ends it.
+    const facadeTracer = tracerProvider.getTracer('facade-test');
+    const callerSpan = facadeTracer.startSpan('llm.client.call', {
+      kind: SpanKind.CLIENT,
+      attributes: {
+        'llm.origin': 'caption-refine',
+        'user.id_hash': hashUserId('u-fwd-2'),
+      },
+    });
+    const originalEnd = callerSpan.end.bind(callerSpan);
+    let endCallCount = 0;
+    callerSpan.end = ((...args: Parameters<typeof originalEnd>) => {
+      endCallCount += 1;
+      return originalEnd(...args);
+    }) as typeof callerSpan.end;
+
+    resolver.enqueueByokSuccess('sk-fwd-2', 'anthropic');
+    provider.enqueueSuccess();
+
+    await context.with(
+      trace.setSpan(context.active(), callerSpan),
+      () =>
+        routeWith({
+          user: {
+            userId: 'u-fwd-2',
+            plan: 'free',
+            llmKeyProvider: 'anthropic',
+            llmKeyStatus: 'active',
+          },
+          request: baseRequest(),
+          correlationId: DEFAULT_CORR_ID,
+          origin: DEFAULT_ORIGIN,
+        }),
+    );
+
+    // After route() returned, the router must NOT have ended the span
+    // (it doesn't own it). The caller will end it later.
+    expect(endCallCount).toBe(0);
+    // And the exporter has not received it yet.
+    expect(
+      exporter
+        .getFinishedSpans()
+        .filter((s) => s.name === 'llm.client.call'),
+    ).toHaveLength(0);
+
+    // The caller ends the span exactly once — symmetric with the
+    // facade's own `finally { span.end() }`.
+    callerSpan.end();
+    expect(endCallCount).toBe(1);
+    expect(
+      exporter
+        .getFinishedSpans()
+        .filter((s) => s.name === 'llm.client.call'),
+    ).toHaveLength(1);
+  });
   });
 });
 
