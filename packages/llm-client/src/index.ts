@@ -59,9 +59,23 @@
  *   (the `.call()` total). See §4.1 / §4.2 / §5.3 / §8 of
  *   LLM_CLIENT.md v1.1 and `.cmsgs/iter7-accounting-design.md`.
  *
+ * Iteration 8 commit 1 shipped the `IdempotencyStore` interface +
+ *   in-memory LRU `InMemoryIdempotencyStore` (capacity 10 000, TTL
+ *   expiry-on-read, Map-insertion-order LRU) + `buildIdempotencyKey`
+ *   helper. No facade wiring yet — iter 8 commit 3 consumes this
+ *   surface.
+ * Iteration 8 commit 2 shipped the `FlushScheduler` — a standalone
+ *   orchestrator around `UsageRecorder.flush()` with three triggers
+ *   (`'interval'`, `'threshold'`, `'close'`), serialised flushes,
+ *   idempotent `start()` / `stop()`, empty-buffer short-circuit, and
+ *   a new `llm_flush_scheduler_runs_total{trigger}` counter. Also
+ *   introduced the shared `Logger` surface + `NOOP_LOGGER` default
+ *   under `observability/`. The facade (commit 3) owns one scheduler
+ *   per `LLMClient` instance and calls `notifyBufferChanged()` after
+ *   every successful `.call()`.
+ *
  * The `LLMClient.call()` surface (orchestrator, latency, idempotency,
- * accounting-flush scheduler) lands in Iteration 8 of the
- * implementation plan.
+ * accounting-flush scheduler wiring) lands in Iteration 8 commit 3.
  *
  * @see ../../../docs/LLM_CLIENT.md — the signed contract this
  *      package implements (v1.1 SIGNED, 2026-04-18).
@@ -76,6 +90,7 @@ export * from './http/index.js';
 export * from './routing/index.js';
 export * from './accounting/index.js';
 export * from './idempotency/index.js';
+export * from './scheduler/index.js';
 export type {
   NormalizedContentBlock,
   NormalizedLLMRequest,

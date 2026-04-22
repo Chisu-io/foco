@@ -6,6 +6,8 @@ export {
   InMemoryMetrics,
 } from './metrics.js';
 
+export { type LogMeta, type Logger, NOOP_LOGGER } from './logger.js';
+
 export {
   type SpanAttrs,
   type WithSpanOptions,

@@ -68,6 +68,10 @@
     "./idempotency": {
       "types": "./src/idempotency/index.ts",
       "import": "./src/idempotency/index.ts"
+    },
+    "./scheduler": {
+      "types": "./src/scheduler/index.ts",
+      "import": "./src/scheduler/index.ts"
     }
   },
   "publishConfig": {
@@ -113,6 +117,10 @@
       "./idempotency": {
         "types": "./dist/idempotency/index.d.ts",
         "import": "./dist/idempotency/index.js"
+      },
+      "./scheduler": {
+        "types": "./dist/scheduler/index.d.ts",
+        "import": "./dist/scheduler/index.js"
       }
     }
   },

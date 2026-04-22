@@ -41,6 +41,19 @@
  *      reason ∈ {buffer_full}  (fires Grafana P1 alert)
  *   llm_accounting_buffer_size                                   gauge
  *
+ * Client / scheduler (iter 8) ———————————————————————————————————
+ *   llm_idempotency_hits_total{reason}                           counter
+ *      reason ∈ {same_request}  (single value today; dim reserved
+ *      so future reasons extend without renaming the counter)
+ *   llm_idempotency_misses_total                                 counter
+ *   llm_flush_scheduler_runs_total{trigger}                      counter
+ *      trigger ∈ {interval,threshold,close}
+ *      — `interval` fires every `intervalMs` (default 5 000 ms).
+ *      — `threshold` fires once when the buffer crosses the
+ *        configured high-water mark (re-arms on drain).
+ *      — `close` fires once from `FlushScheduler.stop()` to drain
+ *        on graceful shutdown.
+ *
  * Non-PII invariant (§10.2 + §5.2 of the accounting design doc):
  * dimensions on every metric MUST be categorical. Never `user_id`,
  * never `prompt_hash`, never `trace_id`, never `api_key` or ciphertext.
