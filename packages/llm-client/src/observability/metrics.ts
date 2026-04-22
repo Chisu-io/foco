@@ -53,6 +53,19 @@
  *        configured high-water mark (re-arms on drain).
  *      — `close` fires once from `FlushScheduler.stop()` to drain
  *        on graceful shutdown.
+ *   llm_client_inflight_calls                                    gauge
+ *      — no dimensions; emitted as the counter of in-flight
+ *        `LLMClient.call()` invocations (incremented on entry,
+ *        decremented in `finally`). Used by the graceful-close
+ *        drain loop and by Grafana to alert on stuck calls.
+ *   llm_client_close_drained_total{result}                       counter
+ *      result ∈ {drained,timeout}
+ *      — `drained` fires when `LLMClient.close()` observed inflight=0
+ *        before the drain budget expired.
+ *      — `timeout` fires when the drain budget (default 5 000 ms)
+ *        expired with inflight still > 0; remaining calls are
+ *        abandoned (their `finally` still runs) and the next
+ *        `.call()` rejects with `make.internal('client.call: closed')`.
  *
  * Non-PII invariant (§10.2 + §5.2 of the accounting design doc):
  * dimensions on every metric MUST be categorical. Never `user_id`,

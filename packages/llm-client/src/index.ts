@@ -73,9 +73,30 @@
  *   under `observability/`. The facade (commit 3) owns one scheduler
  *   per `LLMClient` instance and calls `notifyBufferChanged()` after
  *   every successful `.call()`.
- *
- * The `LLMClient.call()` surface (orchestrator, latency, idempotency,
- * accounting-flush scheduler wiring) lands in Iteration 8 commit 3.
+ * Iteration 8 commit 3 shipped the `LLMClient` facade itself — the
+ *   public entry point that composes the 6 previously-signed internals
+ *   (crypto, plan-router, circuit audit, OTel, accounting, idempotency
+ *   + flush scheduler). Adds idempotency lookup/set around
+ *   `plan-router.route()`, deadline enforcement via
+ *   `AbortSignal.any([caller, AbortSignal.timeout(budget)])`, an
+ *   in-memory inflight gauge (`llm_client_inflight_calls`), and
+ *   graceful `close()` with drain timeout
+ *   (`llm_client_close_drained_total{result=drained|timeout}`). The
+ *   facade wraps every call in the root `llm.client.call` span that
+ *   the plan router reuses (§5.3 iter 8 forward-compat) so
+ *   `traceId`/`spanId` stay aligned across retry and fallback attempts.
+ *   Delegated decisions firmadas 2026-04-21:
+ *     #1 deadline_exceeded → `make.networkError(false)` + span
+ *        `setStatus(ERROR, 'deadline_exceeded')`;
+ *     #2 closed/invalid_input → `make.internal('client.call: closed')`
+ *        / `make.internal('client.call: invalid_input')` with span
+ *        attribute `llm.internal_reason='closed'|'invalid_input'`;
+ *     #3 LLMCallInput superset → accept `user: UserQuota` + §3.3
+ *        fields; `idempotencyKey?` IGNORED (derived from
+ *        `(userId, hashNormalizedRequest, model)`); `correlationId`
+ *        derived from `traceparent` with `randomUUID()` fallback.
+ *   The `LLMCallInput` type is a superset of `NormalizedLLMRequest`
+ *   so callers can pass planner output unchanged.
  *
  * @see ../../../docs/LLM_CLIENT.md — the signed contract this
  *      package implements (v1.1 SIGNED, 2026-04-18).
@@ -91,6 +112,20 @@ export * from './routing/index.js';
 export * from './accounting/index.js';
 export * from './idempotency/index.js';
 export * from './scheduler/index.js';
+export {
+  LLMClient,
+  deriveCorrelationId,
+  CLIENT_SPAN_NAME,
+  INFLIGHT_GAUGE,
+  CLOSE_DRAINED_COUNTER,
+  DEFAULT_IDEMPOTENCY_TTL_MS,
+  DEFAULT_DRAIN_TIMEOUT_MS,
+  type LLMClientConfig,
+  type LLMClientDeps,
+  type LLMCallOptions,
+  type LLMCallInput,
+  type LLMCallSuccess,
+} from './client.js';
 export type {
   NormalizedContentBlock,
   NormalizedLLMRequest,
