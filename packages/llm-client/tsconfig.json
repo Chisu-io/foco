@@ -4,7 +4,8 @@
     "rootDir": ".",
     "outDir": "dist",
     "noEmit": true,
-    "resolveJsonModule": true
+    "resolveJsonModule": true,
+    "types": ["node"]
   },
   "include": ["src/**/*", "test/**/*"],
   "exclude": ["node_modules", "dist", ".turbo", "coverage"]
