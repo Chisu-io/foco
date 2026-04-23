@@ -269,10 +269,12 @@ const callInputSchema = z
  *  - 18.3: `correlationId?` declared as typed optional field (caller
  *    override preferred over `traceparent` parsing when non-empty).
  *
- * The `idempotencyKey?` caller override is **ignored** in c3 — the
- * facade always computes {@link buildIdempotencyKey}`(userId,
- * promptHash, model)`. Iter 9 will honour the override (tracked in
- * LLM_CLIENT.md pendiente 18.2).
+ * The `idempotencyKey?` caller override is honoured (iter 9 c2,
+ * LLM_CLIENT.md §18.2): when provided and non-empty the facade
+ * composes it with `userId` before hashing, preventing cross-tenant
+ * collision for deterministic caller patterns (cron, worker job id,
+ * replayable fixture). Empty strings fall back to the derived
+ * `(userId, promptHash, model)` key.
  */
 export interface LLMCallInput {
   /**
@@ -313,7 +315,15 @@ export interface LLMCallInput {
    * behaviour: `.passthrough()` only, not declared on the type).
    */
   readonly correlationId?: string | undefined;
-  /** §3.3 — IGNORED in c3. Iter 9 will honour the override. */
+  /**
+   * §3.3 — Optional caller-supplied idempotency key. When provided and
+   * non-empty, the facade composes it with `userId` before hashing so
+   * the same key cannot collide across tenants (see
+   * {@link buildIdempotencyKey} and LLM_CLIENT.md §18.2). Useful for
+   * cron jobs or worker patterns that already hold a stable business
+   * identifier. Empty strings fall back to the derived
+   * `(userId, promptHash, model)` key.
+   */
   readonly idempotencyKey?: string | undefined;
 }
 
@@ -492,11 +502,17 @@ export class LLMClient {
       // lowercase SHA-256 of the canonicalised request (§8 #1). The
       // idempotency key hashes `(userId + promptHash + model)` again
       // so the raw userId does not leak into the cache key space.
+      //
+      // Iter 9 c2 (§18.2): honour `input.idempotencyKey` override. When
+      // provided and non-empty it composes with `userId` so the same
+      // caller-visible key cannot collide across tenants. Empty strings
+      // fall through to the derived 3-tuple.
       const promptHash = hashNormalizedRequest(input.request);
       const idemKey = buildIdempotencyKey(
         input.user.userId,
         promptHash,
         input.request.model,
+        input.idempotencyKey,
       );
 
       // Stamp the remaining two open-time attributes now that the

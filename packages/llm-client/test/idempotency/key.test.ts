@@ -97,3 +97,62 @@ describe('buildIdempotencyKey — canonical pre-image', () => {
     expect(buildIdempotencyKey(USER, PROMPT_HASH, MODEL)).toBe(expected);
   });
 });
+
+// ─── c2 (§18.2): caller-provided idempotencyKey override ─────────────
+
+describe('buildIdempotencyKey — callerKey override (§18.2)', () => {
+  it('returns a different digest when a non-empty callerKey is provided', () => {
+    const derived = buildIdempotencyKey(USER, PROMPT_HASH, MODEL);
+    const overridden = buildIdempotencyKey(
+      USER,
+      PROMPT_HASH,
+      MODEL,
+      'job-abc-123',
+    );
+    expect(overridden).toMatch(/^[0-9a-f]{64}$/);
+    expect(overridden).not.toBe(derived);
+  });
+
+  it('treats an empty callerKey as absent (falls back to derived key)', () => {
+    const derived = buildIdempotencyKey(USER, PROMPT_HASH, MODEL);
+    const emptyOverride = buildIdempotencyKey(USER, PROMPT_HASH, MODEL, '');
+    expect(emptyOverride).toBe(derived);
+  });
+
+  it('treats an undefined callerKey as absent (falls back to derived key)', () => {
+    const derived = buildIdempotencyKey(USER, PROMPT_HASH, MODEL);
+    const explicitUndef = buildIdempotencyKey(
+      USER,
+      PROMPT_HASH,
+      MODEL,
+      undefined,
+    );
+    expect(explicitUndef).toBe(derived);
+  });
+
+  it('scopes the callerKey to userId — same callerKey, different userId → different digest', () => {
+    const a = buildIdempotencyKey('user-A', PROMPT_HASH, MODEL, 'shared-key');
+    const b = buildIdempotencyKey('user-B', PROMPT_HASH, MODEL, 'shared-key');
+    expect(a).not.toBe(b);
+  });
+
+  it('is deterministic with the override across calls', () => {
+    const a = buildIdempotencyKey(USER, PROMPT_HASH, MODEL, 'repeat-key');
+    const b = buildIdempotencyKey(USER, PROMPT_HASH, MODEL, 'repeat-key');
+    expect(a).toBe(b);
+  });
+
+  it('matches a hand-computed SHA-256 over "userId:callerKey:promptHash:model"', () => {
+    const sep = IDEMPOTENCY_KEY_SEPARATOR;
+    const callerKey = 'replay-42';
+    const expected = createHash('sha256')
+      .update(
+        `${USER}${sep}${callerKey}${sep}${PROMPT_HASH}${sep}${MODEL}`,
+        'utf8',
+      )
+      .digest('hex');
+    expect(buildIdempotencyKey(USER, PROMPT_HASH, MODEL, callerKey)).toBe(
+      expected,
+    );
+  });
+});

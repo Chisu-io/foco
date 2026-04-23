@@ -66,19 +66,34 @@ export const IDEMPOTENCY_KEY_SEPARATOR = ':';
  *  - `model` is the original requested model, NOT the resolved
  *    `modelUsed` — idempotency is about request-shape equality, and
  *    fallbacks to a different model still serve the original request.
+ *  - `callerKey` is an optional `LLMCallInput.idempotencyKey` passed
+ *    by the caller (cron, worker job id, replayable test fixture).
+ *    When provided and non-empty it is hashed together with `userId`
+ *    so the same `callerKey` value cannot collide across tenants
+ *    (LLM_CLIENT.md §18.2). When `undefined` or empty, the builder
+ *    falls back to the original 3-tuple derivation so existing
+ *    cache entries from iter 8 remain reachable.
  *
- * Output is the 64-char lowercase hex SHA-256 of
- * `${userId}:${promptHash}:${model}`.
+ * Output is the 64-char lowercase hex SHA-256 of the canonical
+ * pre-image:
+ *
+ *  - without override: `${userId}:${promptHash}:${model}`
+ *  - with override:    `${userId}:${callerKey}:${promptHash}:${model}`
+ *
+ * The two pre-image shapes are intentionally distinct by length and
+ * structure, so a caller-provided key and a derived key over the same
+ * `(userId, promptHash, model)` cannot produce the same digest.
  */
 export function buildIdempotencyKey(
   userId: string,
   promptHash: string,
   model: string,
+  callerKey?: string,
 ): string {
-  return createHash('sha256')
-    .update(
-      `${userId}${IDEMPOTENCY_KEY_SEPARATOR}${promptHash}${IDEMPOTENCY_KEY_SEPARATOR}${model}`,
-      'utf8',
-    )
-    .digest('hex');
+  const sep = IDEMPOTENCY_KEY_SEPARATOR;
+  const preImage =
+    typeof callerKey === 'string' && callerKey.length > 0
+      ? `${userId}${sep}${callerKey}${sep}${promptHash}${sep}${model}`
+      : `${userId}${sep}${promptHash}${sep}${model}`;
+  return createHash('sha256').update(preImage, 'utf8').digest('hex');
 }

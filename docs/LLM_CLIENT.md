@@ -1484,24 +1484,35 @@ resuelve quota. Metric sub-span `llm.quota.resolve` (§5.3
 extension). Coste: 1 nuevo archivo (`repos/user-quota-repo.ts`), 1
 edit en `client.ts` (<30 LoC), 1 edit en specs.
 
-### 18.2 · `input.idempotencyKey?` override ignorado
+### 18.2 · `input.idempotencyKey?` override ignorado — ✅ CERRADO iter 9 c2
 
-**Qué**: hoy si el caller pasa `input.idempotencyKey`, el facade
-lo ignora y deriva siempre desde `(userId, hashNormalizedRequest,
-model)`. Iter 8 c3 firmó esto como decisión delegada #3.
+**Qué era**: si el caller pasaba `input.idempotencyKey`, el
+facade lo ignoraba y derivaba siempre desde `(userId,
+hashNormalizedRequest, model)`. Iter 8 c3 firmó esto como
+decisión delegada #3.
 
-**Por qué deuda**: callers con patrones deterministas (cron,
-reintentos idempotentes con UUID propio) pierden la capacidad de
-controlar la clave. El campo quedó declarado en el tipo pero es
-no-op — UX técnico confuso.
+**Qué cambió (iter 9 c2)**:
 
-**Qué hace iter 9**: si `input.idempotencyKey` está definido,
-componerlo con userId para evitar colisión cross-tenant:
-`sha256(userId + ':' + callerKey + ':' + promptHash + ':' + model)`.
-Si no está definido, mantener derivación actual. Nueva spec
-`accepts caller-provided idempotencyKey scoped to userId` en
-`test/client/client.test.ts`. Coste: <15 LoC en
-`buildIdempotencyKey()` + 1 spec nueva.
+- `buildIdempotencyKey(userId, promptHash, model, callerKey?)`
+  acepta un 4° argumento opcional. Cuando `callerKey` es string
+  no-vacío, compone el pre-image como
+  `${userId}:${callerKey}:${promptHash}:${model}`; cuando está
+  ausente o vacío, mantiene el pre-image de 3-tuplas original —
+  entradas de cache pre-iter-9 siguen reachable.
+- `src/client.ts` pasa `input.idempotencyKey` al builder como 4°
+  argumento sin validación extra (el zod mirror ya normaliza
+  string/undefined).
+- JSDoc de `LLMCallInput.idempotencyKey` actualizado explicando
+  semantics + edge case del string vacío.
+- 6 specs unitarias nuevas en `test/idempotency/key.test.ts`
+  (shape con callerKey, fallback con empty/undefined, scoping
+  cross-tenant, determinismo, canonical pre-image de 4 tuplas).
+- 1 spec integration en `test/client/client.test.ts`:
+  `accepts caller-provided idempotencyKey scoped to userId`
+  verificando los 3 casos (override non-empty → diff, mismo
+  callerKey cross-tenant → diff, empty → fallback).
+
+Coste real: 18 LoC producción + 85 LoC tests + JSDoc.
 
 ### 18.3 · `correlationId?` no declarado como campo tipado — ✅ CERRADO iter 9 c1
 

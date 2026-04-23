@@ -285,6 +285,59 @@ describe('LLMClient.call — idempotency', () => {
       expectedDefaultIdempotencyKey(),
     );
   });
+
+  it('accepts caller-provided idempotencyKey scoped to userId (§18.2)', async () => {
+    // §18.2: when `input.idempotencyKey` is non-empty, the facade
+    // composes it with `userId` before hashing. Two tenants passing
+    // the same caller-visible key must produce DIFFERENT cache keys
+    // (no cross-tenant collision), and the empty-string case MUST
+    // fall back to the derived 3-tuple so iter-8 cache entries stay
+    // reachable.
+    const callerKey = 'cron-daily-summary-2026-04-22';
+
+    // Case 1: non-empty override → digest differs from the derived key.
+    const fakes1 = makeDeps();
+    fakes1.router.enqueue(okRouterOutput());
+    const client1 = new LLMClient(fakes1.deps);
+    await client1.call({
+      ...makeCallInput(),
+      idempotencyKey: callerKey,
+    });
+    const overriddenKey = fakes1.idempotencyStore.lastSetArgs?.key;
+    expect(overriddenKey).toBeDefined();
+    expect(overriddenKey).not.toBe(expectedDefaultIdempotencyKey());
+    expect(overriddenKey).toBe(
+      buildIdempotencyKey(
+        DEFAULT_USER.userId,
+        hashNormalizedRequest(DEFAULT_REQUEST),
+        DEFAULT_REQUEST.model,
+        callerKey,
+      ),
+    );
+
+    // Case 2: same caller-visible key across tenants → different cache keys.
+    const fakes2 = makeDeps();
+    fakes2.router.enqueue(okRouterOutput());
+    const client2 = new LLMClient(fakes2.deps);
+    await client2.call({
+      ...makeCallInput(),
+      user: { ...DEFAULT_USER, userId: 'tenant-B' },
+      idempotencyKey: callerKey,
+    });
+    expect(fakes2.idempotencyStore.lastSetArgs?.key).not.toBe(overriddenKey);
+
+    // Case 3: empty-string override → falls back to derived key.
+    const fakes3 = makeDeps();
+    fakes3.router.enqueue(okRouterOutput());
+    const client3 = new LLMClient(fakes3.deps);
+    await client3.call({
+      ...makeCallInput(),
+      idempotencyKey: '',
+    });
+    expect(fakes3.idempotencyStore.lastSetArgs?.key).toBe(
+      expectedDefaultIdempotencyKey(),
+    );
+  });
 });
 
 describe('LLMClient.call — zod parse', () => {
