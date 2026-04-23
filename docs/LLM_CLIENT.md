@@ -1446,7 +1446,152 @@ GrowthBook.
   (sigue como placeholder hasta que OpenAI publique final). Las
   otras 6 decisiones abiertas (§16 "Aún abiertas") quedan igual.
 
-## 18 · Relación con otros documentos
+## 18 · Pendientes iter 9 (deuda técnica post-iter-8)
+
+Estas son concesiones conscientes que iter 8 commit 3 firmó
+como "delegated decisions" para cerrar el facade `LLMClient` sin
+re-abrir contratos ni bloquear la cadena de commits. Cada
+pendiente tiene un plan ejecutable que iter 9 resuelve antes del
+release candidate. Ninguno viola los 8 invariantes de §2 ni la
+matriz billable-vs-pre-call de §4.2 — son *strictness gaps*, no
+comportamiento.
+
+**Regla de re-firma**: cualquier pendiente cuyo plan termine
+tocando un invariante de §2 o la superficie pública de
+`@chisu/schemas` requiere nueva ronda de peer review + bump semver
+antes de mergear; los demás se cierran con commits convencionales
+dentro de iter 9.
+
+### 18.1 · `LLMCallInput` superset → §3.3 exact
+
+**Qué**: hoy `LLMCallInput` acepta `user: UserQuota` más los
+campos §3.3, para que `plan-router` pueda consumir salida del
+planner sin remapeo. Iter 8 c3 firmó esto como decisión
+delegada #3.
+
+**Por qué deuda**: §3.3 es el contrato firmado. `UserQuota` vive
+en `@chisu/schemas` y es un objeto pesado; aceptarlo en el input
+del facade filtra responsabilidad de resolución de quota hacia el
+caller, cuando §3 dice explícitamente que `LLMClient.call()` recibe
+`userId` y resuelve internamente.
+
+**Qué hace iter 9**: introducir `UserQuotaRepo` como DI seam
+(`interface UserQuotaRepo { get(userId): Promise<UserQuota> }`),
+mover la resolución dentro de `client.call()` antes del router,
+y retirar `user: UserQuota` de `LLMCallInput`. El planner pasa a
+construir `NormalizedLLMRequest` puro (§3.3 exact) y el facade
+resuelve quota. Metric sub-span `llm.quota.resolve` (§5.3
+extension). Coste: 1 nuevo archivo (`repos/user-quota-repo.ts`), 1
+edit en `client.ts` (<30 LoC), 1 edit en specs.
+
+### 18.2 · `input.idempotencyKey?` override ignorado
+
+**Qué**: hoy si el caller pasa `input.idempotencyKey`, el facade
+lo ignora y deriva siempre desde `(userId, hashNormalizedRequest,
+model)`. Iter 8 c3 firmó esto como decisión delegada #3.
+
+**Por qué deuda**: callers con patrones deterministas (cron,
+reintentos idempotentes con UUID propio) pierden la capacidad de
+controlar la clave. El campo quedó declarado en el tipo pero es
+no-op — UX técnico confuso.
+
+**Qué hace iter 9**: si `input.idempotencyKey` está definido,
+componerlo con userId para evitar colisión cross-tenant:
+`sha256(userId + ':' + callerKey + ':' + promptHash + ':' + model)`.
+Si no está definido, mantener derivación actual. Nueva spec
+`accepts caller-provided idempotencyKey scoped to userId` en
+`test/client/client.test.ts`. Coste: <15 LoC en
+`buildIdempotencyKey()` + 1 spec nueva.
+
+### 18.3 · `correlationId?` no declarado como campo tipado — ✅ CERRADO iter 9 c1
+
+**Qué era**: el commit message de iter 8 c3 afirmaba que
+`correlationId?` estaba en schema; la realidad era que entraba
+vía `.passthrough()` del zod mirror, no como campo declarado.
+`deriveCorrelationId()` lo extraía pero TypeScript no lo veía en
+el tipo público.
+
+**Alcance firmado iter 9 c1**: **local a `@chisu/llm-client`**,
+no cross-cut a `@chisu/schemas`. `LLMCallInput` vive en
+`packages/llm-client/src/client.ts`, no en schemas — el campo
+aditivo-opcional no requiere bump semver ni re-firma. El zod
+mirror de `@chisu/schemas` sigue aceptando el campo vía
+`.passthrough()`; el facade lo declara localmente como
+sub-typing legítimo del contrato canonical.
+
+**Qué cambió**:
+- `LLMCallInput.correlationId?: string | undefined` declarado.
+- `callInputSchema` zod mirror local declara el campo
+  explícitamente (además del `.passthrough()`).
+- Facade step 9 resuelve en orden:
+  (1) `input.correlationId` si es string no-vacío →
+  (2) `deriveCorrelationId(input.traceparent)` →
+  (3) fallback `randomUUID()` dentro de `deriveCorrelationId`.
+- 2 specs añadidas: "uses input.correlationId verbatim when
+  provided and non-empty" + "falls back to traceparent parse
+  when input.correlationId is an empty string".
+
+Coste real: 11 LoC producción + 22 LoC tests + JSDoc/comments.
+
+### 18.4 · Coverage per-file de `src/client.ts` bajo umbral
+
+**Qué**: coverage global 97.77/94.05/97.69 ✅; per-file
+`src/client.ts` 94.08/90.54/100 — statements 94.08% contra
+umbral 95%.
+
+**Por qué deuda**: las líneas no cubiertas (723-728, 762-772,
+835-836) son paths defensivos:
+- **723-728**: rama de fallback cuando `trace.getActiveSpan()`
+  retorna span no-recording (test environment con tracer no-op
+  parcial).
+- **762-772**: manejo de `err` dentro de `raceDrain` cuando un
+  inflight rechaza con error no-envuelto.
+- **835-836**: guard de `resolveInflight` undefined en cleanup
+  (TS narrow que nunca dispara en runtime pero el compilador
+  pide).
+
+**Qué hace iter 9**: subir a ≥95/90/95 per-file añadiendo 3-4
+specs que ejerciten esos paths con doubles específicos (tracer
+non-recording, inflight que lanza `Error` puro, cleanup-race).
+Coste: <80 LoC de test, 0 cambios de producción.
+
+### 18.5 · `LLMClient.ping()` + `LLMClient.invalidateUserKey()` fuera del facade
+
+**Qué**: el facade expone solo `call()` y `close()`. Las
+operaciones adyacentes (`ping` para healthcheck, `invalidateUserKey`
+para forzar re-lookup de DEK tras rotación) están implementadas en
+`plan-router` y `EnvelopeCrypto` respectivamente, pero no tienen
+entry point en el facade público.
+
+**Por qué deuda**: callers (UI settings-integraciones, cron de
+healthcheck, webhook de rotación KMS) deben bypass el facade y
+hablar con internals. Rompe encapsulación.
+
+**Qué hace iter 9**:
+- `LLMClient.ping(userId: string, provider?: ProviderId): Promise<PingOutput>`
+  — delega a `plan-router.ping()` (existe) + consume cuota 0,
+  no emite `UsageEntry`, pasa por circuit breaker (si abierto,
+  rechaza con `provider_down`).
+- `LLMClient.invalidateUserKey(userId: string): Promise<void>`
+  — delega a `EnvelopeCrypto.invalidateAll(userId)` (requiere
+  añadir método nuevo que purga entradas de DEK cache por userId
+  en todas las kekVersion). Emite métrica
+  `llm_key_invalidations_total{origin='explicit'}`.
+
+Si `EnvelopeCrypto.invalidateAll()` toca la superficie firmada de
+`@chisu/llm-client/crypto`, requiere peer review. Coste estimado:
+<60 LoC producción + <120 LoC specs.
+
+---
+
+**Planeado como commits independientes iter 9** (regla
+commit-per-step): cada pendiente 18.1-18.5 es su propio commit
+convencional. Orden sugerido: 18.3 (tipo) → 18.2 (idempotency
+override) → 18.1 (UserQuotaRepo) → 18.5 (ping/invalidate) → 18.4
+(coverage bump, cierra iter 9). 18.3 y 18.5 son los dos
+candidatos a requerir re-firma según alcance final.
+
+## 19 · Relación con otros documentos
 
 - **`UX_FROZEN.md v1.3 §3.6` + `§5 settings-integraciones`**:
   define las cuotas por plan y la pantalla de gestión de keys que
