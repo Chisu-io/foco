@@ -102,6 +102,7 @@ import {
 import {
   type PlanRouter,
   type RouteInput,
+  type RoutePingInput,
   type UserQuota,
 } from './routing/plan-router.js';
 import { type Clock } from './time.js';
@@ -116,7 +117,7 @@ import type { UserQuotaRepo } from './repos/user-quota-repo.js';
 import type { OriginKind } from './routing/events.js';
 import type { FlushScheduler } from './scheduler/flush-scheduler.js';
 import type { NormalizedLLMRequest } from './types/request.js';
-import type { LLMCallOutput } from './types/response.js';
+import type { LLMCallOutput, PingOutput } from './types/response.js';
 
 // ─── Constants ────────────────────────────────────────────────────────
 //
@@ -194,6 +195,31 @@ const QUOTA_TRANSPORT_SPAN_MESSAGE = 'quota_transport';
 
 /** Name of the sub-span that wraps the repo call. §10.1 extension. */
 export const QUOTA_RESOLVE_SPAN_NAME = 'llm.quota.resolve';
+
+/**
+ * OTel span name for `LLMClient.ping()`. Opens a CLIENT span (the ping
+ * does touch the wire) and wraps the router's ping call so the
+ * settings-integraciones UI + healthcheck cron surfaces show one span
+ * per `ping()` invocation. Iter 9 c4 addition.
+ */
+export const PING_SPAN_NAME = 'llm.client.ping';
+
+/**
+ * Counter emitted once per `LLMClient.invalidateUserKey(userId)` call.
+ * `origin='explicit'` when triggered by a caller (settings UI, rotation
+ * webhook); future iterations may add `origin='byok_invalid'` when the
+ * router auto-invalidates after an `invalid_key` error.
+ */
+export const KEY_INVALIDATIONS_COUNTER = 'llm_key_invalidations_total';
+
+/**
+ * Structured `correlationId` for the `internal` variant emitted when
+ * `LLMClient.ping()` is invoked with a `userId` the repo cannot
+ * resolve or when the caller omits the `provider` argument AND the
+ * resolved quota has no `llmKeyProvider` on file — the facade cannot
+ * ping "any" provider without a target.
+ */
+const INTERNAL_REASON_PING_NO_PROVIDER = 'client.ping: no_provider';
 
 /**
  * Span `setStatus` message for a pre-router deadline expiry. The error
@@ -814,6 +840,179 @@ export class LLMClient {
     // are not our problem past this point).
     await this.deps.flushScheduler.stop();
     await this.deps.idempotencyStore.clear();
+  }
+
+  /**
+   * Provider-scoped healthcheck / BYOK key validation (iter 9 c4,
+   * `LLM_CLIENT.md §18.5`).
+   *
+   * Typical call sites:
+   *  - **Settings UI** — user just saved a BYOK key and the panel
+   *    wants a green/red indicator ("clave válida / clave inválida").
+   *    Pass `provider` explicitly; `fundingMode` defaults to `'byok'`.
+   *  - **Healthcheck cron (§6)** — periodic sweep to refresh the
+   *    `user_llm_key.status` column. Pass `provider` matching the row
+   *    under test.
+   *  - **Rotation webhook** — after `invalidateUserKey`, the caller
+   *    may want to re-probe the managed pool health; pass
+   *    `fundingMode: 'managed'`.
+   *
+   * Flow:
+   *  1. Closed gate (matches `call()` semantics).
+   *  2. Quota resolve via `userQuotaRepo.get(userId)` — reuses the
+   *     same seam as `call()` so missing user / transport errors are
+   *     reported identically.
+   *  3. Provider selection: caller-supplied `provider` wins; else
+   *     falls back to `quota.llmKeyProvider`; else returns
+   *     `internal('client.ping: no_provider')`.
+   *  4. Delegates to `router.ping(...)` under a `llm.client.ping`
+   *     CLIENT span.
+   *
+   * Never throws. Never emits a `UsageEntry` (ping is non-billable —
+   * §4.2). Does record CB outcome so a failing provider still opens
+   * the breaker.
+   */
+  async ping(args: {
+    readonly userId: string;
+    readonly provider?: ProviderName | undefined;
+    readonly fundingMode?: 'byok' | 'managed' | undefined;
+    readonly correlationId?: string | undefined;
+    readonly abortSignal?: AbortSignal | undefined;
+  }): Promise<Result<PingOutput, LLMCallError>> {
+    if (this.closed) {
+      return err(make.internal(INTERNAL_REASON_CLOSED));
+    }
+
+    const correlationId =
+      typeof args.correlationId === 'string' && args.correlationId.length > 0
+        ? args.correlationId
+        : randomUUID();
+    const span = this.deps.tracer.startSpan(PING_SPAN_NAME, {
+      kind: SpanKind.CLIENT,
+      attributes: {
+        'user.id_hash': hashUserId(args.userId),
+      },
+    });
+
+    try {
+      const quotaResult = await this.deps.userQuotaRepo.get(args.userId);
+      if (!quotaResult.ok) {
+        if (quotaResult.error.kind === 'not_found') {
+          span.setStatus({
+            code: SpanStatusCode.ERROR,
+            message: QUOTA_NOT_FOUND_SPAN_MESSAGE,
+          });
+          return err(make.internal(INTERNAL_REASON_QUOTA_NOT_FOUND));
+        }
+        this.deps.logger.warn('llm-client: quota repo transport error', {
+          userId: hashUserId(args.userId),
+          reason: quotaResult.error.reason,
+        });
+        span.setStatus({
+          code: SpanStatusCode.ERROR,
+          message: QUOTA_TRANSPORT_SPAN_MESSAGE,
+        });
+        return err(make.internal(INTERNAL_REASON_QUOTA_TRANSPORT));
+      }
+      const user = quotaResult.value;
+
+      const provider = args.provider ?? user.llmKeyProvider;
+      if (provider === undefined) {
+        span.setStatus({
+          code: SpanStatusCode.ERROR,
+          message: 'no_provider',
+        });
+        return err(make.internal(INTERNAL_REASON_PING_NO_PROVIDER));
+      }
+
+      // Default fundingMode: 'byok' if the caller did not specify and
+      // the user has an active BYOK key for this provider; else
+      // 'managed'. Callers can force either mode via the arg.
+      const fundingMode: 'byok' | 'managed' =
+        args.fundingMode ??
+        (user.llmKeyProvider === provider && user.llmKeyStatus === 'active'
+          ? 'byok'
+          : 'managed');
+
+      span.setAttribute('llm.provider', provider);
+      span.setAttribute('llm.funding_mode', fundingMode);
+
+      const routePingInput: RoutePingInput = {
+        user,
+        provider,
+        fundingMode,
+        correlationId,
+        ...(args.abortSignal !== undefined
+          ? { abortSignal: args.abortSignal }
+          : {}),
+      };
+      const result = await context.with(
+        trace.setSpan(context.active(), span),
+        async () => this.deps.router.ping(routePingInput),
+      );
+
+      if (result.ok) {
+        span.setStatus({ code: SpanStatusCode.OK });
+      } else {
+        span.setStatus({
+          code: SpanStatusCode.ERROR,
+          message: result.error.kind,
+        });
+      }
+      return result;
+    } catch (thrown) {
+      // Contract: never throws. Mirror `call()` defensive catch.
+      const message =
+        thrown instanceof Error ? thrown.message : String(thrown);
+      this.deps.logger.warn('llm-client: unexpected throw in ping()', {
+        error: message,
+      });
+      span.setStatus({
+        code: SpanStatusCode.ERROR,
+        message: 'unexpected',
+      });
+      return err(make.internal(`client.ping: unexpected (${message})`));
+    } finally {
+      span.end();
+    }
+  }
+
+  /**
+   * Purge all cached DEK entries for `userId` (iter 9 c4, §18.5).
+   *
+   * Called after the hosting app updates `user_llm_key` (rotation,
+   * revocation, user-driven key change). `EnvelopeCrypto.invalidateUserKey`
+   * returns the count of cache entries actually evicted; the facade
+   * emits `llm_key_invalidations_total{origin='explicit'}` once per
+   * invocation, regardless of that count, so dashboards can see both
+   * the call rate (counter) and the hit rate (the evictions counter
+   * emitted inside EnvelopeCrypto).
+   *
+   * Idempotent: calling twice with the same userId is safe — the
+   * second call emits a second counter row (the caller DID invoke it
+   * twice) but evicts zero entries.
+   *
+   * Never throws. If the caller passes an empty userId the method
+   * short-circuits without touching the cache; log once at `warn`
+   * so observability flags the suspicious call-site.
+   *
+   * The method is `async` by contract (facade returns `Promise<void>`)
+   * even though the current implementation is synchronous — future
+   * adapters that add IO (Redis cache invalidation, fanout across
+   * multiple key versions) must be able to change the body without
+   * breaking the caller's `await`. Same precedent as
+   * `InMemoryIdempotencyStore` in iter 9 c0/f.
+   */
+  // eslint-disable-next-line @typescript-eslint/require-await -- async contract is load-bearing; body is sync today but the facade returns Promise<void> so future Redis-backed invalidation adapters can add real IO without a caller-side migration.
+  async invalidateUserKey(userId: string): Promise<void> {
+    if (userId.length === 0) {
+      this.deps.logger.warn('llm-client: invalidateUserKey called with empty userId', {});
+      return;
+    }
+    this.deps.envelope.invalidateUserKey(userId);
+    this.deps.metrics.counter(KEY_INVALIDATIONS_COUNTER, {
+      origin: 'explicit',
+    });
   }
 
   /**

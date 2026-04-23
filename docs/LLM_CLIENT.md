@@ -1588,7 +1588,7 @@ specs que ejerciten esos paths con doubles específicos (tracer
 non-recording, inflight que lanza `Error` puro, cleanup-race).
 Coste: <80 LoC de test, 0 cambios de producción.
 
-### 18.5 · `LLMClient.ping()` + `LLMClient.invalidateUserKey()` fuera del facade
+### 18.5 · `LLMClient.ping()` + `LLMClient.invalidateUserKey()` fuera del facade — ✅ CERRADO iter 9 c4
 
 **Qué**: el facade expone solo `call()` y `close()`. Las
 operaciones adyacentes (`ping` para healthcheck, `invalidateUserKey`

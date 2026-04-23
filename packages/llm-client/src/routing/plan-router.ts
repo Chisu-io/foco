@@ -86,7 +86,7 @@ import type { Metrics } from '../observability/metrics.js';
 import type { Provider, ProviderName } from '../providers/provider.js';
 import type { ConsentMode } from '../types/repos.js';
 import type { ModelId, NormalizedLLMRequest } from '../types/request.js';
-import type { ProviderCallOutput } from '../types/response.js';
+import type { PingOutput, ProviderCallOutput } from '../types/response.js';
 
 
 /**
@@ -286,11 +286,42 @@ export interface RouterCallOutput extends ProviderCallOutput {
   readonly fundingMode: 'byok' | 'managed';
 }
 
+
+/**
+ * Input to `PlanRouter.ping` — healthcheck / BYOK key validation
+ * (iter 9 c4, `LLM_CLIENT.md §18.5`). Tighter than `RouteInput`:
+ *
+ *  - No `request`: `Provider.ping` synthesises its own 1-token probe.
+ *  - No `origin` + no accounting: ping is non-billable (§4.2).
+ *  - `provider` is explicit: ping is provider-scoped by design (you
+ *    ping "anthropic" to validate your anthropic key, not a model).
+ *  - `fundingMode` is explicit: the facade decides based on the plan
+ *    + the user's BYOK state, not the router. Router honours the
+ *    caller's choice verbatim.
+ */
+export interface RoutePingInput {
+  readonly user: UserQuota;
+  readonly provider: ProviderName;
+  readonly fundingMode: 'byok' | 'managed';
+  readonly correlationId: string;
+  readonly abortSignal?: AbortSignal | undefined;
+}
 /** Public surface of the router. */
 export interface PlanRouter {
   route(
     input: RouteInput,
   ): Promise<Result<RouterCallOutput, LLMCallError>>;
+  /**
+   * Provider-scoped healthcheck / BYOK key validation. Added iter 9
+   * c4 (§18.5). Resolves the key for `input.provider` under
+   * `input.fundingMode`, gates through the circuit breaker, and
+   * delegates to `Provider.ping`. Never emits a `UsageEntry`
+   * (non-wire-billable per §4.2) but DOES record CB outcome so a
+   * degraded provider still opens the breaker.
+   */
+  ping(
+    input: RoutePingInput,
+  ): Promise<Result<PingOutput, LLMCallError>>;
 }
 
 /** Metric names emitted by the router. */
@@ -1027,7 +1058,90 @@ export function createPlanRouter(deps: PlanRouterDeps): PlanRouter {
     });
   }
 
-  return Object.freeze({ route });
+
+  /**
+   * Provider-scoped healthcheck / BYOK key validation (iter 9 c4,
+   * §18.5). Reuses the resolver + circuit breaker but NOT the
+   * consent/accounting path — ping is non-billable (§4.2).
+   *
+   * Flow:
+   *  1. Registry lookup — return `make.internal(...)` if the provider
+   *     is not registered (deployment bug, not a user error).
+   *  2. CB check — `deny_open` / `deny_probes_exhausted` short-circuit
+   *     with `make.providerDown(provider, true)` and emit
+   *     `llm_router_cb_denies_total{provider, decision}`.
+   *  3. Resolver — same `ApiKeyResolver` the `route()` path uses, with
+   *     `mode = input.fundingMode`. Failures surface verbatim
+   *     (`invalid_key`, `plan_requires_key`, `kms_unavailable`, …).
+   *  4. `Provider.ping({ apiKey, abortSignal? })` — the adapter
+   *     synthesises its own 1-token probe.
+   *  5. Record CB outcome via `classifyOutcomeForBreaker` so the
+   *     breaker sees ping results too. No UsageEntry is emitted.
+   *
+   * Never throws. Never logs key material.
+   */
+  async function routePing(
+    input: RoutePingInput,
+  ): Promise<Result<PingOutput, LLMCallError>> {
+    const provider = providers.get(input.provider);
+    if (provider === undefined) {
+      return err(
+        make.internal(
+          `router.ping: unregistered provider ${input.provider}`,
+        ),
+      );
+    }
+
+    const decision = breaker.isCallAllowed(input.provider);
+    if (decision === 'deny_open' || decision === 'deny_probes_exhausted') {
+      metrics.counter(ROUTER_METRIC_NAMES.cbDenies, {
+        provider: input.provider,
+        decision,
+      });
+      return err(make.providerDown(input.provider, true));
+    }
+
+    const keyReq: ApiKeyRequest =
+      input.fundingMode === 'byok'
+        ? {
+            mode: 'byok',
+            userId: input.user.userId,
+            provider: input.provider,
+            ...(input.abortSignal !== undefined
+              ? { abortSignal: input.abortSignal }
+              : {}),
+          }
+        : {
+            mode: 'managed',
+            provider: input.provider,
+            ...(input.abortSignal !== undefined
+              ? { abortSignal: input.abortSignal }
+              : {}),
+          };
+    const keyResult = await resolver.resolve(keyReq);
+    if (!keyResult.ok) {
+      return err(keyResult.error);
+    }
+
+    const pingResult = await provider.ping({
+      apiKey: keyResult.value.apiKey,
+      ...(input.abortSignal !== undefined
+        ? { abortSignal: input.abortSignal }
+        : {}),
+    });
+
+    if (pingResult.ok) {
+      breaker.record(input.provider, 'success');
+    } else {
+      breaker.record(
+        input.provider,
+        classifyOutcomeForBreaker(pingResult.error),
+      );
+    }
+    return pingResult;
+  }
+
+  return Object.freeze({ route, ping: routePing });
 }
 
 /**

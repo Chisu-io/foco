@@ -53,13 +53,14 @@ import type {
 import type {
   PlanRouter,
   RouteInput,
+  RoutePingInput,
   RouterCallOutput,
   UserQuota,
 } from '../../src/routing/plan-router.js';
 import type { FlushScheduler } from '../../src/scheduler/flush-scheduler.js';
 import type { FlushTrigger } from '../../src/scheduler/flush-scheduler.js';
 import type { NormalizedLLMRequest } from '../../src/types/request.js';
-import type { LLMCallOutput } from '../../src/types/response.js';
+import type { LLMCallOutput, PingOutput } from '../../src/types/response.js';
 
 // Re-export FakeLogger from the scheduler suite so client specs need
 // only `from './_fakes.js'`. The shape is identical and pinning it in
@@ -167,6 +168,31 @@ export class FakePlanRouter implements PlanRouter {
     }
     return next.result;
   }
+
+  // ─── Ping support (iter 9 c4, §18.5) ────────────────────────────────
+
+  /** Captured arg from every `.ping()` call (invocation order). */
+  readonly pingLog: RoutePingInput[] = [];
+
+  /** Queue of ping outcomes; shifts on every call. */
+  private readonly pingQueue: Result<PingOutput, LLMCallError>[] = [];
+
+  /** Used when the ping queue is empty. */
+  pingFallback: Result<PingOutput, LLMCallError> = err({
+    kind: 'internal',
+    correlationId: 'fake-router: no queued ping result',
+  });
+
+  enqueuePing(result: Result<PingOutput, LLMCallError>): void {
+    this.pingQueue.push(result);
+  }
+
+  async ping(
+    input: RoutePingInput,
+  ): Promise<Result<PingOutput, LLMCallError>> {
+    this.pingLog.push(input);
+    return this.pingQueue.shift() ?? this.pingFallback;
+  }
 }
 
 // ─── FakeEnvelopeCrypto ───────────────────────────────────────────────
@@ -190,12 +216,18 @@ export class FakeEnvelopeCrypto {
       'FakeEnvelopeCrypto.unwrap called — facade must not touch crypto in iter 8 c3',
     );
   }
-  // Structural match for future-compat — `EnvelopeCrypto` exposes
-  // `invalidateUserKey` but the facade does not use it in c3 either.
-  invalidateUserKey(): number {
-    throw new Error(
-      'FakeEnvelopeCrypto.invalidateUserKey called — iter 9 scope, not c3',
-    );
+  /**
+   * Tracks every call so iter 9 c4 specs can assert the facade wiring.
+   * Iter 8 c3 used to throw here (the facade didn't call it yet); iter
+   * 9 c4 enabled `LLMClient.invalidateUserKey()` so the fake must now
+   * match the real envelope's shape: `(userId: string): number`. Tests
+   * that need to drive a specific return value spy on this method
+   * directly via `vi.spyOn(envelope, 'invalidateUserKey')`.
+   */
+  readonly invalidateUserKeyCalls: string[] = [];
+  invalidateUserKey(userId: string): number {
+    this.invalidateUserKeyCalls.push(userId);
+    return 0;
   }
 }
 

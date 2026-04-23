@@ -68,7 +68,9 @@ import {
   DEFAULT_DRAIN_TIMEOUT_MS,
   DEFAULT_IDEMPOTENCY_TTL_MS,
   INFLIGHT_GAUGE,
+  KEY_INVALIDATIONS_COUNTER,
   LLMClient,
+  PING_SPAN_NAME,
   QUOTA_RESOLVE_SPAN_NAME,
   deriveCorrelationId,
   type LLMClientDeps,
@@ -960,5 +962,214 @@ describe('deriveCorrelationId — helper', () => {
   it('falls back to randomUUID on empty string', () => {
     const out = deriveCorrelationId('');
     expect(out).toMatch(/^[0-9a-f-]{36}$/);
+  });
+});
+
+
+// ─── Iter 9 c4 (§18.5) — ping + invalidateUserKey ────────────────────
+
+describe('LLMClient.ping — quota resolve + router delegation', () => {
+  it('happy path: resolves quota, picks byok for active BYOK user, delegates to router.ping, stamps span OK', async () => {
+    const fakes = makeDeps();
+    fakes.router.enqueuePing(
+      ok({
+        status: 'active',
+        model: 'claude-haiku-4-5',
+      }),
+    );
+    const client = new LLMClient(fakes.deps);
+
+    const result = await client.ping({
+      userId: DEFAULT_USER.userId,
+      provider: 'anthropic',
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.status).toBe('active');
+    }
+    // Router consulted exactly once; no route() call.
+    expect(fakes.router.pingLog).toHaveLength(1);
+    expect(fakes.router.callLog).toHaveLength(0);
+    const pingInput = fakes.router.pingLog[0]!;
+    expect(pingInput.provider).toBe('anthropic');
+    // DEFAULT_USER has llmKeyProvider='anthropic' + llmKeyStatus='active'
+    // → facade defaults to byok.
+    expect(pingInput.fundingMode).toBe('byok');
+    expect(pingInput.user.userId).toBe(DEFAULT_USER.userId);
+
+    // Span stamped with provider + funding_mode, status OK.
+    const span = exporter
+      .getFinishedSpans()
+      .find((s) => s.name === PING_SPAN_NAME);
+    expect(span).toBeDefined();
+    expect(span!.status.code).toBe(SpanStatusCode.OK);
+    expect(span!.attributes['llm.provider']).toBe('anthropic');
+    expect(span!.attributes['llm.funding_mode']).toBe('byok');
+    expect(span!.attributes['user.id_hash']).toBe(
+      hashUserId(DEFAULT_USER.userId),
+    );
+  });
+
+  it('caller-provided fundingMode override: managed beats the byok default', async () => {
+    const fakes = makeDeps();
+    fakes.router.enqueuePing(ok({ status: 'active', model: 'gpt-5-mini' }));
+    const client = new LLMClient(fakes.deps);
+
+    await client.ping({
+      userId: DEFAULT_USER.userId,
+      provider: 'anthropic',
+      fundingMode: 'managed',
+    });
+
+    expect(fakes.router.pingLog[0]!.fundingMode).toBe('managed');
+  });
+
+  it('omitted provider: falls back to quota.llmKeyProvider', async () => {
+    const fakes = makeDeps();
+    fakes.router.enqueuePing(ok({ status: 'active', model: 'claude-haiku-4-5' }));
+    const client = new LLMClient(fakes.deps);
+
+    await client.ping({ userId: DEFAULT_USER.userId });
+
+    expect(fakes.router.pingLog[0]!.provider).toBe(
+      DEFAULT_USER.llmKeyProvider,
+    );
+  });
+
+  it('omitted provider AND quota.llmKeyProvider undefined → internal(client.ping: no_provider), no router call', async () => {
+    const fakes = makeDeps();
+    fakes.userQuotaRepo.seedQuota({
+      userId: 'user_no_key',
+      plan: 'free',
+      // llmKeyProvider intentionally absent.
+    });
+    const client = new LLMClient(fakes.deps);
+
+    const result = await client.ping({ userId: 'user_no_key' });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok && result.error.kind === 'internal') {
+      expect(result.error.correlationId).toBe('client.ping: no_provider');
+    } else {
+      throw new Error('expected internal(no_provider)');
+    }
+    expect(fakes.router.pingLog).toHaveLength(0);
+  });
+
+  it('quota not_found: internal(quota_not_found), no router call', async () => {
+    const fakes = makeDeps();
+    fakes.userQuotaRepo.seedError({ kind: 'not_found', userId: 'ghost' });
+    const client = new LLMClient(fakes.deps);
+
+    const result = await client.ping({
+      userId: 'ghost',
+      provider: 'anthropic',
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok && result.error.kind === 'internal') {
+      expect(result.error.correlationId).toBe('client.call: quota_not_found');
+    } else {
+      throw new Error('expected internal(quota_not_found)');
+    }
+    expect(fakes.router.pingLog).toHaveLength(0);
+  });
+
+  it('router returns invalid_key: surfaced verbatim, span ERROR with error.kind as message', async () => {
+    const fakes = makeDeps();
+    fakes.router.enqueuePing(err(make.invalidKey('anthropic')));
+    const client = new LLMClient(fakes.deps);
+
+    const result = await client.ping({
+      userId: DEFAULT_USER.userId,
+      provider: 'anthropic',
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.kind).toBe('invalid_key');
+    }
+    const span = exporter
+      .getFinishedSpans()
+      .find((s) => s.name === PING_SPAN_NAME);
+    expect(span!.status.code).toBe(SpanStatusCode.ERROR);
+    expect(span!.status.message).toBe('invalid_key');
+  });
+
+  it('after close(): returns internal(client.call: closed), no span, no router call', async () => {
+    const fakes = makeDeps();
+    const client = new LLMClient(fakes.deps);
+    await client.close();
+    exporter.reset();
+
+    const result = await client.ping({
+      userId: DEFAULT_USER.userId,
+      provider: 'anthropic',
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok && result.error.kind === 'internal') {
+      expect(result.error.correlationId).toBe('client.call: closed');
+    }
+    expect(
+      exporter.getFinishedSpans().filter((s) => s.name === PING_SPAN_NAME),
+    ).toHaveLength(0);
+    expect(fakes.router.pingLog).toHaveLength(0);
+  });
+});
+
+describe('LLMClient.invalidateUserKey — cache purge + metric', () => {
+  it('calls EnvelopeCrypto.invalidateUserKey(userId) and emits counter', async () => {
+    const fakes = makeDeps();
+    const client = new LLMClient(fakes.deps);
+
+    await client.invalidateUserKey(DEFAULT_USER.userId);
+
+    expect(fakes.envelope.invalidateUserKeyCalls).toEqual([
+      DEFAULT_USER.userId,
+    ]);
+    expect(
+      fakes.metrics.readCounter(KEY_INVALIDATIONS_COUNTER, {
+        origin: 'explicit',
+      }),
+    ).toBe(1);
+  });
+
+  it('empty userId: warns, does not touch envelope, does not emit counter', async () => {
+    const fakes = makeDeps();
+    const client = new LLMClient(fakes.deps);
+
+    await client.invalidateUserKey('');
+
+    expect(fakes.envelope.invalidateUserKeyCalls).toEqual([]);
+    expect(
+      fakes.metrics.readCounter(KEY_INVALIDATIONS_COUNTER, {
+        origin: 'explicit',
+      }),
+    ).toBe(0);
+    expect(
+      fakes.logger.warnings.some((w) =>
+        w.msg.includes('invalidateUserKey called with empty userId'),
+      ),
+    ).toBe(true);
+  });
+
+  it('two calls with the same userId emit two counter rows (not idempotent on the counter)', async () => {
+    const fakes = makeDeps();
+    const client = new LLMClient(fakes.deps);
+
+    await client.invalidateUserKey(DEFAULT_USER.userId);
+    await client.invalidateUserKey(DEFAULT_USER.userId);
+
+    expect(fakes.envelope.invalidateUserKeyCalls).toEqual([
+      DEFAULT_USER.userId,
+      DEFAULT_USER.userId,
+    ]);
+    expect(
+      fakes.metrics.readCounter(KEY_INVALIDATIONS_COUNTER, {
+        origin: 'explicit',
+      }),
+    ).toBe(2);
   });
 });
