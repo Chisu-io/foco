@@ -72,8 +72,8 @@ async function main(): Promise<void> {
     const outPath = resolve(outDir, outFile);
     console.log(
       `[render-poc] rendering ${vars.aspectRatio} ` +
-        `(${vars.resolution.width}x${vars.resolution.height} @ ${vars.fps}fps, ` +
-        `${vars.durationSec}s) -> ${outPath}`,
+        `(${String(vars.resolution.width)}x${String(vars.resolution.height)} @ ${String(vars.fps)}fps, ` +
+        `${String(vars.durationSec)}s) -> ${outPath}`,
     );
     await renderVideo({
       projectFile,

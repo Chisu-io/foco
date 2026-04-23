@@ -6,8 +6,6 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import type { RenderRequest } from '@chisu/schemas';
-
 import { resolutionFor, SUPPORTED_ASPECTS } from '../src/aspect.js';
 import {
   captionPositionToYFraction,
@@ -15,6 +13,8 @@ import {
   toProjectVariablesForAspects,
 } from '../src/bridge.js';
 import { faceCamCaptionsFixture } from '../src/fixture.js';
+
+import type { RenderRequest } from '@chisu/schemas';
 
 describe('aspect ratio table', () => {
   it('maps the three MVP ratios to 1080p resolutions', () => {

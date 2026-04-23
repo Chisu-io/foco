@@ -33,8 +33,9 @@ export function resolutionFor(aspect: AspectRatio): Resolution {
   // This is unreachable given the schema's enum, but we keep the guard so
   // future ratio additions cause a compile error here instead of silent
   // failure in the renderer.
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- defensive guard against runtime shapes that bypass the schema (e.g. legacy payloads pre-UX_FROZEN v1.3).
   if (!res) {
-    throw new Error(`[render-poc] unknown aspect ratio: ${String(aspect)}`);
+    throw new Error(`[render-poc] unknown aspect ratio: ${aspect}`);
   }
   return res;
 }

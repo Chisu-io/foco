@@ -13,14 +13,14 @@
  * kinds (avatar, overlay, bgMusic) are contract-valid but out of scope for
  * this first video. Attempting to render them here throws a clear error.
  */
+import { resolutionFor, type Resolution } from './aspect.js';
+
 import type {
   CaptionWord,
   Layer,
   RenderRequest,
   Scene,
 } from '@chisu/schemas';
-
-import { resolutionFor, type Resolution } from './aspect.js';
 
 /**
  * Flat, renderer-friendly view of the caption style. Defaults are applied
@@ -86,7 +86,7 @@ const TRANSFORM_DEFAULTS = {
 function requireSingleScene(request: RenderRequest): Scene {
   if (request.scenes.length !== 1) {
     throw new Error(
-      `[render-poc] POC only supports single-scene requests; got ${request.scenes.length}`,
+      `[render-poc] POC only supports single-scene requests; got ${String(request.scenes.length)}`,
     );
   }
   const scene = request.scenes[0];
@@ -118,15 +118,19 @@ function ensureKnownLayerKinds(layers: readonly Layer[]): void {
 function mapFaceCam(
   layer: Extract<Layer, { kind: 'faceCam' }>,
 ): FaceCamVars {
+  // `layer.transform` is the schema-defined transform (all fields required
+  // after zod defaults apply); when absent, we fall back to TRANSFORM_DEFAULTS
+  // which is a typed const literal. Either way, the 6 fields below are
+  // non-nullable at this point — the per-field `??` was redundant.
   const t = layer.transform ?? TRANSFORM_DEFAULTS;
   return {
     sourceUri: layer.sourceUri,
-    xPct: t.xPct ?? TRANSFORM_DEFAULTS.xPct,
-    yPct: t.yPct ?? TRANSFORM_DEFAULTS.yPct,
-    widthPct: t.widthPct ?? TRANSFORM_DEFAULTS.widthPct,
-    heightPct: t.heightPct ?? TRANSFORM_DEFAULTS.heightPct,
-    rotationDeg: t.rotationDeg ?? TRANSFORM_DEFAULTS.rotationDeg,
-    zIndex: t.zIndex ?? TRANSFORM_DEFAULTS.zIndex,
+    xPct: t.xPct,
+    yPct: t.yPct,
+    widthPct: t.widthPct,
+    heightPct: t.heightPct,
+    rotationDeg: t.rotationDeg,
+    zIndex: t.zIndex,
   };
 }
 

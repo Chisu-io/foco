@@ -14,7 +14,7 @@
  * decoupling is intentional: if the contract changes shape, we update the
  * bridge, not every scene.
  */
-import { Txt, View2D, Video, makeScene2D } from '@revideo/2d';
+import { Txt, Video, makeScene2D } from '@revideo/2d';
 import { all, createRef, useScene, waitFor } from '@revideo/core';
 
 import {
@@ -22,12 +22,15 @@ import {
   type RevideoProjectVariables,
 } from '../bridge.js';
 
+import type { View2D } from '@revideo/2d';
+
 export default makeScene2D('face-cam-captions', function* (view: View2D) {
   const vars = useScene().variables.get(
     'vars',
     null as unknown as RevideoProjectVariables,
   )();
 
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- the default value is `null as unknown as RevideoProjectVariables`; the type says always-present but runtime can legitimately hit `null` when `makeProject` forgets the variables block.
   if (!vars) {
     throw new Error(
       '[render-poc] scene variables missing -- did you forget makeProject({ variables: { vars } })?',
