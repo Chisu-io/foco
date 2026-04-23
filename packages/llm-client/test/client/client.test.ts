@@ -1117,6 +1117,73 @@ describe('LLMClient.ping — quota resolve + router delegation', () => {
     ).toHaveLength(0);
     expect(fakes.router.pingLog).toHaveLength(0);
   });
+
+  it('uses input.correlationId verbatim when provided and non-empty', async () => {
+    const fakes = makeDeps();
+    fakes.router.enqueuePing(ok({ status: 'active', model: 'claude-haiku-4-5' }));
+    const client = new LLMClient(fakes.deps);
+
+    await client.ping({
+      userId: DEFAULT_USER.userId,
+      provider: 'anthropic',
+      correlationId: 'my-stable-corr-id',
+    });
+
+    expect(fakes.router.pingLog[0]!.correlationId).toBe('my-stable-corr-id');
+  });
+
+  it('quota transport error: internal(quota_transport), logs reason, no router call', async () => {
+    const fakes = makeDeps();
+    fakes.userQuotaRepo.seedError({
+      kind: 'transport',
+      reason: 'db_timeout',
+    });
+    const client = new LLMClient(fakes.deps);
+
+    const result = await client.ping({
+      userId: DEFAULT_USER.userId,
+      provider: 'anthropic',
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok && result.error.kind === 'internal') {
+      expect(result.error.correlationId).toBe('client.call: quota_transport');
+    } else {
+      throw new Error('expected internal(quota_transport)');
+    }
+    expect(fakes.router.pingLog).toHaveLength(0);
+    expect(
+      fakes.logger.warnings.some(
+        (w) => w.msg === 'llm-client: quota repo transport error',
+      ),
+    ).toBe(true);
+  });
+
+  it('router throwing is translated to internal(client.ping: unexpected ...) and logged', async () => {
+    const fakes = makeDeps();
+    fakes.router.ping = async () => {
+      throw new Error('fake router ping exploded');
+    };
+    const client = new LLMClient(fakes.deps);
+
+    const result = await client.ping({
+      userId: DEFAULT_USER.userId,
+      provider: 'anthropic',
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok && result.error.kind === 'internal') {
+      expect(result.error.correlationId).toContain('client.ping: unexpected');
+      expect(result.error.correlationId).toContain('fake router ping exploded');
+    } else {
+      throw new Error('expected internal(unexpected)');
+    }
+    expect(
+      fakes.logger.warnings.some((w) =>
+        w.msg.includes('unexpected throw in ping'),
+      ),
+    ).toBe(true);
+  });
 });
 
 describe('LLMClient.invalidateUserKey — cache purge + metric', () => {

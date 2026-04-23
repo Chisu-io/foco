@@ -1566,7 +1566,7 @@ sub-typing legítimo del contrato canonical.
 
 Coste real: 11 LoC producción + 22 LoC tests + JSDoc/comments.
 
-### 18.4 · Coverage per-file de `src/client.ts` bajo umbral
+### 18.4 · Coverage per-file de `src/client.ts` bajo umbral — ✅ CERRADO iter 9 c5
 
 **Qué**: coverage global 97.77/94.05/97.69 ✅; per-file
 `src/client.ts` 94.08/90.54/100 — statements 94.08% contra

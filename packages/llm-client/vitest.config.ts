@@ -32,12 +32,27 @@ export default defineConfig({
         'src/types/**',
         'src/**/index.ts',
         'src/providers/provider.ts',
+        // `user-quota-repo.ts` is interface + type declarations only —
+        // no executable code, so v8 reports 0% coverage. Iter 9 c3
+        // added this file; the runtime implementation lands in
+        // apps/web/ and tests via the FakeUserQuotaRepo in
+        // test/client/_fakes.ts.
+        'src/repos/user-quota-repo.ts',
       ],
       thresholds: {
         statements: 90,
         branches: 85,
         functions: 90,
         lines: 90,
+        // Per-file gate for `client.ts` — iter 9 c5 (§18.4) promised
+        // ≥95/90/95 on the facade specifically. Other files are
+        // constrained by the global thresholds above.
+        'src/client.ts': {
+          statements: 95,
+          branches: 90,
+          functions: 95,
+          lines: 95,
+        },
       },
     },
   },

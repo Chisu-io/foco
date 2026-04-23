@@ -96,7 +96,7 @@ import type {
   ModelId,
   NormalizedLLMRequest,
 } from '../../src/types/request.js';
-import type { ProviderCallOutput } from '../../src/types/response.js';
+import type { PingOutput, ProviderCallOutput } from '../../src/types/response.js';
 
 // ─── Test harness ─────────────────────────────────────────────────────
 //
@@ -174,10 +174,44 @@ class FakeProvider implements Provider {
     return next;
   }
 
+  private readonly pingOutcomes: Result<PingOutput, LLMCallError>[] = [];
+  readonly pingLog: {
+    apiKey: string;
+    abortSignal: AbortSignal | undefined;
+  }[] = [];
+
+  enqueuePingSuccess(
+    overrides: Partial<PingOutput> = {},
+  ): this {
+    this.pingOutcomes.push(
+      ok({
+        status: 'active',
+        model: 'claude-haiku-4-5',
+        ...overrides,
+      }),
+    );
+    return this;
+  }
+
+  enqueuePingError(e: LLMCallError): this {
+    this.pingOutcomes.push(err(e));
+    return this;
+  }
+
   async ping(
-    _input: ProviderPingInput,
-  ): Promise<Result<never, LLMCallError>> {
-    throw new Error('ping not used in router tests');
+    input: ProviderPingInput,
+  ): Promise<Result<PingOutput, LLMCallError>> {
+    this.pingLog.push({
+      apiKey: input.apiKey,
+      abortSignal: input.abortSignal,
+    });
+    const next = this.pingOutcomes.shift();
+    if (next === undefined) {
+      throw new Error(
+        `FakeProvider(${this.name}).ping exhausted — no more queued outcomes`,
+      );
+    }
+    return next;
   }
 }
 
@@ -2425,5 +2459,186 @@ describe('PlanRouter — iter 7 commit 4 — accounting wiring (§4.2 matrix)', 
     expect(entry.inputTokens).toBe(7);
     expect(entry.outputTokens).toBe(2);
     expect('kekVersion' in entry).toBe(false);
+  });
+});
+
+
+// ─── router.ping (iter 9 c4, §18.5) ──────────────────────────────────
+
+function makePingBreaker(metrics: InMemoryMetrics): ReturnType<typeof createCircuitBreaker> {
+  return createCircuitBreaker({
+    flags: flags(),
+    metrics,
+    now: () => 1_700_000_000_000,
+  });
+}
+
+describe('router.ping — happy path', () => {
+  it('byok ping: resolver → provider.ping → success, records CB outcome', async () => {
+    const provider = new FakeProvider('anthropic');
+    provider.enqueuePingSuccess({ providerRequestId: 'req-123' });
+    const resolver = new FakeResolver();
+    resolver.enqueueByokSuccess('sk-user', 'anthropic', 1);
+    const metrics = new InMemoryMetrics();
+    const breaker = makePingBreaker(metrics);
+    const router = buildRouter(provider, resolver, breaker, metrics);
+
+    const res = await router.ping({
+      user: {
+        userId: 'u1',
+        plan: 'influencer',
+        llmKeyProvider: 'anthropic',
+        llmKeyStatus: 'active',
+      },
+      provider: 'anthropic',
+      fundingMode: 'byok',
+      correlationId: 'corr-ping-1',
+    });
+
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.value.status).toBe('active');
+      expect(res.value.providerRequestId).toBe('req-123');
+    }
+    expect(provider.pingLog).toHaveLength(1);
+    expect(provider.pingLog[0]!.apiKey).toBe('sk-user');
+  });
+
+  it('managed ping with abortSignal: propagated to provider.ping', async () => {
+    const provider = new FakeProvider('openai');
+    provider.enqueuePingSuccess();
+    const resolver = new FakeResolver();
+    resolver.enqueueManagedSuccess('sk-pool', 'openai');
+    const metrics = new InMemoryMetrics();
+    const breaker = makePingBreaker(metrics);
+    const router = buildRouter(provider, resolver, breaker, metrics);
+
+    const ctrl = new AbortController();
+    const res = await router.ping({
+      user: { userId: 'u1', plan: 'influencer' },
+      provider: 'openai',
+      fundingMode: 'managed',
+      correlationId: 'corr-ping-2',
+      abortSignal: ctrl.signal,
+    });
+
+    expect(res.ok).toBe(true);
+    expect(provider.pingLog[0]!.abortSignal).toBe(ctrl.signal);
+  });
+});
+
+describe('router.ping — error paths', () => {
+  it('unregistered provider → internal("router.ping: unregistered …"), no provider call', async () => {
+    const resolver = new FakeResolver();
+    const metrics = new InMemoryMetrics();
+    const breaker = makePingBreaker(metrics);
+    const router = createPlanRouter({
+      providers: emptyRegistry(),
+      resolver,
+      breaker,
+      flags: flags(),
+      metrics,
+      consentResolver: new FakeConsentResolver(),
+      usageRecorder: new FakeUsageRecorder(),
+    });
+
+    const res = await router.ping({
+      user: { userId: 'u1', plan: 'influencer' },
+      provider: 'anthropic',
+      fundingMode: 'managed',
+      correlationId: 'corr-ping-3',
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok && res.error.kind === 'internal') {
+      expect(res.error.correlationId).toContain('router.ping: unregistered');
+    } else {
+      throw new Error('expected internal error');
+    }
+  });
+
+  it('CB open → provider_down(circuitOpen:true), bumps cb_denies, no provider call', async () => {
+    const provider = new FakeProvider('anthropic');
+    const resolver = new FakeResolver();
+    const metrics = new InMemoryMetrics();
+    // Tight thresholds so a handful of failures opens the breaker.
+    const breaker = createCircuitBreaker({
+      flags: createStaticFlagsReader({
+        ...FLAG_DEFAULTS,
+        'llm.circuit_breaker.volume_threshold': 3,
+        'llm.circuit_breaker.error_threshold': 0.3,
+      }),
+      metrics,
+      now: () => 1_700_000_000_000,
+    });
+    for (let i = 0; i < 10; i++) {
+      breaker.record('anthropic', 'failure');
+    }
+
+    const router = buildRouter(provider, resolver, breaker, metrics);
+    const res = await router.ping({
+      user: { userId: 'u1', plan: 'influencer' },
+      provider: 'anthropic',
+      fundingMode: 'managed',
+      correlationId: 'corr-ping-4',
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok && res.error.kind === 'provider_down') {
+      expect(res.error.circuitOpen).toBe(true);
+    } else {
+      throw new Error('expected provider_down');
+    }
+    expect(provider.pingLog).toHaveLength(0);
+  });
+
+  it('resolver error → surfaced verbatim, no provider.ping call', async () => {
+    const provider = new FakeProvider('anthropic');
+    const resolver = new FakeResolver();
+    resolver.enqueueManagedError(make.kmsUnavailable(true));
+    const metrics = new InMemoryMetrics();
+    const breaker = makePingBreaker(metrics);
+    const router = buildRouter(provider, resolver, breaker, metrics);
+
+    const res = await router.ping({
+      user: { userId: 'u1', plan: 'influencer' },
+      provider: 'anthropic',
+      fundingMode: 'managed',
+      correlationId: 'corr-ping-5',
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.error.kind).toBe('kms_unavailable');
+    }
+    expect(provider.pingLog).toHaveLength(0);
+  });
+
+  it('provider.ping returns invalid_key → surfaced, CB records failure', async () => {
+    const provider = new FakeProvider('anthropic');
+    provider.enqueuePingError(make.invalidKey('anthropic'));
+    const resolver = new FakeResolver();
+    resolver.enqueueByokSuccess('sk-bad', 'anthropic');
+    const metrics = new InMemoryMetrics();
+    const breaker = makePingBreaker(metrics);
+    const router = buildRouter(provider, resolver, breaker, metrics);
+
+    const res = await router.ping({
+      user: {
+        userId: 'u1',
+        plan: 'influencer',
+        llmKeyProvider: 'anthropic',
+        llmKeyStatus: 'active',
+      },
+      provider: 'anthropic',
+      fundingMode: 'byok',
+      correlationId: 'corr-ping-6',
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.error.kind).toBe('invalid_key');
+    }
+    expect(provider.pingLog).toHaveLength(1);
   });
 });
