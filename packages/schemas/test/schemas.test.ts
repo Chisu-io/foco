@@ -157,14 +157,12 @@ describe('JSON Schemas compile as draft 2020-12', () => {
 // --- Happy path: both layers accept the fixture ----------------------------
 
 describe('both JSON Schema and zod accept the fixture', () => {
-  const cases: ReadonlyArray<
-    readonly [
-      string,
-      ReturnType<(typeof ajv)['compile']>,
-      { parse: (x: unknown) => unknown },
-      unknown,
-    ]
-  > = [
+  const cases: readonly (readonly [
+    string,
+    ReturnType<(typeof ajv)['compile']>,
+    { parse: (x: unknown) => unknown },
+    unknown,
+  ])[] = [
     ['RenderRequest', ajv.compile(jsonSchemas.RenderRequest), renderRequestSchema, renderRequestFixture],
     ['MemoryItem', ajv.compile(jsonSchemas.MemoryItem), memoryItemSchema, memoryItemFixture],
     ['UserQuota', ajv.compile(jsonSchemas.UserQuota), userQuotaSchema, userQuotaFixture],

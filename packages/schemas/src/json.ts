@@ -10,12 +10,12 @@
  * roundtrip.
  */
 
-import renderRequest from '../schemas/render-request.schema.json' with { type: 'json' };
-import memoryItem from '../schemas/memory-item.schema.json' with { type: 'json' };
-import userQuota from '../schemas/user-quota.schema.json' with { type: 'json' };
 import ingestAuditEntry from '../schemas/ingest-audit-entry.schema.json' with { type: 'json' };
-import systemAuditEntry from '../schemas/system-audit-entry.schema.json' with { type: 'json' };
 import mcpAuthorization from '../schemas/mcp-authorization.schema.json' with { type: 'json' };
+import memoryItem from '../schemas/memory-item.schema.json' with { type: 'json' };
+import renderRequest from '../schemas/render-request.schema.json' with { type: 'json' };
+import systemAuditEntry from '../schemas/system-audit-entry.schema.json' with { type: 'json' };
+import userQuota from '../schemas/user-quota.schema.json' with { type: 'json' };
 
 export const renderRequestJsonSchema = renderRequest;
 export const memoryItemJsonSchema = memoryItem;
