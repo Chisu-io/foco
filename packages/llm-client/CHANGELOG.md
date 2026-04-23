@@ -5,6 +5,69 @@ All notable changes to `@chisu/llm-client` will be documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.0] — 2026-04-22 — Release candidate
+
+First tagged version of `@chisu/llm-client`. All of iterations 1–11 of
+the signed implementation plan are merged; §18 pendientes (5 items)
+closed; `LLM_CLIENT.md v1.1` contract invariants hold.
+
+### State at 0.1.0
+
+- **Coverage**: global 97.68% stmts / 93.78% branch / 97.73% funcs /
+  97.68% lines. `src/client.ts` per-file gate ≥95/90/95/95 enforced in
+  `vitest.config.ts`.
+- **Tests**: 740 specs across 24 files (unit + contract + property).
+- **CI gates**: `lint` (ESLint flat config + tseslint strict-type-checked),
+  `typecheck` (TS 5.9 strict), `test` (vitest with coverage thresholds),
+  `check-keys` (new iter 10 — scans `src/` for literal Anthropic / OpenAI /
+  Google key shapes; fails build if any match).
+- **Public surface**: `LLMClient` facade with `call` + `close` + `ping`
+  + `invalidateUserKey`. Exports for `errors/`, `config/`, `crypto/`,
+  `observability/`, `providers/`, `routing/`, `types/`.
+- **Flag status**: `llm_routing_enabled` MUST be `false` in production
+  GrowthBook until the hosting app (`apps/web/`) wires the
+  `UserQuotaRepo` adapter against the Supabase schema. The facade
+  rejects calls gracefully if this is not set, but the routing work
+  assumes a real quota row exists upstream.
+
+### Added — Iteration 11 (release prep)
+
+- `package.json` version bump `0.0.0` → `0.1.0`.
+- `package.json` scripts: new `check-keys` runs the iter 10 linter.
+- `README.md` already carries §1–§9 install + usage + contract pointer.
+- `CHANGELOG.md` reorganised so the historical iteration notes land
+  under `## [Unreleased]` (visible below) and this entry seals the
+  cut.
+
+### Added — Iteration 10 (chaos + property-based + CI linter)
+
+- `scripts/check-no-key-in-logs.ts`: standalone TS script (run via
+  `tsx`) that walks every `.ts`/`.tsx` file under `src/` and fails
+  with exit 1 on any match against three real-shape key patterns:
+  Anthropic (`sk-ant-` + 40+ URL-safe), OpenAI (`sk-` / `sk-proj-` +
+  40+ alphanumeric), Google (`AIza` + 35 URL-safe). Test fixture
+  stubs like `'sk-user'` pass because they fail the length gate.
+  Exit codes: 0 clean, 1 matches found, 2 script error.
+- `test/property/classify-exhaustive.property.test.ts`: 6 property
+  suites exhausting the HTTP status space (0-999) × provider × billing
+  combinations. Guarantees `classifyProviderHttpError`:
+    1. Never throws, never returns undefined.
+    2. `billingError=true` collapses to `quota_exhausted` regardless
+       of status.
+    3. 5xx (500/502/503/504) always → `provider_down`.
+    4. 401/403 always → `invalid_key`.
+    5. 429 without billingError → `rate_limit`.
+    6. 3xx unknown statuses → `internal` (fail-safe, no silent pass).
+- **Not added**: dedicated chaos harness as separate specs. The
+  existing unit suite already exercises the fault-injection vectors
+  the plan called for — `test/crypto/kek.test.ts` covers KMS
+  retry / deadline-skipped-retry; `test/routing/plan-router.test.ts`
+  + `test/routing/circuit-breaker.test.ts` cover provider burst /
+  fallback / CB transitions; `test/client/client.test.ts`'s `deadline`
+  block covers tight-deadline short-circuit. Adding a parallel "chaos"
+  directory would duplicate coverage, not extend it. Property-based
+  on classification (above) is the genuine gap the plan pointed at.
+
 ## [Unreleased]
 
 ### Added — Iteration 6 commit 3 (`llm.client.call` root span + `llm.provider.request` sub-span, §10.1)

@@ -1,6 +1,6 @@
 {
   "name": "@chisu/llm-client",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "description": "Plan-aware LLM client for Foco. Routes BYOK (Free/Creator) vs Managed (Influencer+) with envelope encryption (AWS KMS KEK-per-shard), circuit breakers, token accounting and fail-closed semantics. Implements LLM_CLIENT.md v1.1.",
   "keywords": [
@@ -136,6 +136,7 @@
     "test:watch": "vitest --passWithNoTests",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
+    "check-keys": "tsx scripts/check-no-key-in-logs.ts",
     "clean": "rm -rf dist .turbo coverage"
   },
   "dependencies": {
