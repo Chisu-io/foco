@@ -56,6 +56,7 @@ import {
   FakeLogger,
   FakePlanRouter,
   FakeUsageBuffer,
+  FakeUserQuotaRepo,
   makeCallInput,
   makeRouterCallOutput,
   okRouterOutput,
@@ -68,6 +69,7 @@ import {
   DEFAULT_IDEMPOTENCY_TTL_MS,
   INFLIGHT_GAUGE,
   LLMClient,
+  QUOTA_RESOLVE_SPAN_NAME,
   deriveCorrelationId,
   type LLMClientDeps,
   type LLMCallInput,
@@ -129,6 +131,10 @@ function makeDeps(overrides: {
   const metrics = new InMemoryMetrics();
   const logger = new FakeLogger();
   const clock = new FakeClock();
+  const userQuotaRepo = new FakeUserQuotaRepo();
+  // Seed the default tenant so happy-path specs don't have to opt in.
+  // Failure specs can overwrite with `seedError(...)`.
+  userQuotaRepo.seedQuota(DEFAULT_USER);
 
   const deps: LLMClientDeps = {
     router,
@@ -140,6 +146,7 @@ function makeDeps(overrides: {
     tracer: tracerProvider.getTracer('client-test'),
     logger,
     clock: clock.now,
+    userQuotaRepo,
     ...(overrides.config !== undefined ? { config: overrides.config } : {}),
   };
   return {
@@ -152,6 +159,7 @@ function makeDeps(overrides: {
     metrics,
     logger,
     clock,
+    userQuotaRepo,
   };
 }
 
@@ -317,11 +325,12 @@ describe('LLMClient.call — idempotency', () => {
 
     // Case 2: same caller-visible key across tenants → different cache keys.
     const fakes2 = makeDeps();
+    fakes2.userQuotaRepo.seedQuota({ ...DEFAULT_USER, userId: 'tenant-B' });
     fakes2.router.enqueue(okRouterOutput());
     const client2 = new LLMClient(fakes2.deps);
     await client2.call({
       ...makeCallInput(),
-      user: { ...DEFAULT_USER, userId: 'tenant-B' },
+      userId: 'tenant-B',
       idempotencyKey: callerKey,
     });
     expect(fakes2.idempotencyStore.lastSetArgs?.key).not.toBe(overriddenKey);
@@ -370,6 +379,111 @@ describe('LLMClient.call — zod parse', () => {
     expect(span!.status.code).toBe(SpanStatusCode.ERROR);
     expect(span!.status.message).toBe('invalid_input');
     expect(span!.attributes['llm.internal_reason']).toBe('invalid_input');
+  });
+});
+
+describe('LLMClient.call — quota resolve (§18.1 / iter 9 c3)', () => {
+  it('happy path: consults userQuotaRepo once, opens the quota sub-span, propagates the resolved UserQuota to the router', async () => {
+    const fakes = makeDeps();
+    fakes.router.enqueue(okRouterOutput());
+    const client = new LLMClient(fakes.deps);
+
+    const result = await client.call(makeCallInput());
+
+    expect(result.ok).toBe(true);
+    expect(fakes.userQuotaRepo.getCalls).toBe(1);
+    expect(fakes.userQuotaRepo.lastGetUserId).toBe(DEFAULT_USER.userId);
+
+    // The resolved UserQuota object (not a stand-in) landed on the
+    // router's RouteInput.
+    expect(fakes.router.callLog[0]!.user).toEqual(DEFAULT_USER);
+
+    // The sub-span `llm.quota.resolve` opens and closes ok, nested
+    // inside `llm.client.call` via the active-span seam.
+    const quotaSpan = exporter
+      .getFinishedSpans()
+      .find((s) => s.name === QUOTA_RESOLVE_SPAN_NAME);
+    expect(quotaSpan).toBeDefined();
+    expect(quotaSpan!.status.code).toBe(SpanStatusCode.OK);
+    expect(quotaSpan!.attributes['user.id_hash']).toBe(
+      hashUserId(DEFAULT_USER.userId),
+    );
+  });
+
+  it('repo not_found → internal(client.call: quota_not_found), stamps ERROR status on both spans, no router call', async () => {
+    const fakes = makeDeps();
+    fakes.userQuotaRepo.seedError({
+      kind: 'not_found',
+      userId: DEFAULT_USER.userId,
+    });
+    const client = new LLMClient(fakes.deps);
+
+    const result = await client.call(makeCallInput());
+
+    expect(result.ok).toBe(false);
+    if (!result.ok && result.error.kind === 'internal') {
+      expect(result.error.correlationId).toBe('client.call: quota_not_found');
+    } else {
+      throw new Error('expected internal error');
+    }
+    expect(fakes.router.callLog).toHaveLength(0);
+    expect(fakes.idempotencyStore.setCalls).toBe(0);
+
+    const rootSpan = exporter
+      .getFinishedSpans()
+      .find((s) => s.name === CLIENT_SPAN_NAME);
+    expect(rootSpan).toBeDefined();
+    expect(rootSpan!.status.code).toBe(SpanStatusCode.ERROR);
+    expect(rootSpan!.status.message).toBe('quota_not_found');
+    expect(rootSpan!.attributes['llm.internal_reason']).toBe(
+      'quota_not_found',
+    );
+
+    const quotaSpan = exporter
+      .getFinishedSpans()
+      .find((s) => s.name === QUOTA_RESOLVE_SPAN_NAME);
+    expect(quotaSpan).toBeDefined();
+    expect(quotaSpan!.status.code).toBe(SpanStatusCode.ERROR);
+    expect(quotaSpan!.status.message).toBe('quota_not_found');
+  });
+
+  it('repo transport → internal(client.call: quota_transport), logs reason, no router call', async () => {
+    const fakes = makeDeps();
+    fakes.userQuotaRepo.seedError({
+      kind: 'transport',
+      reason: 'connection_refused',
+    });
+    const client = new LLMClient(fakes.deps);
+
+    const result = await client.call(makeCallInput());
+
+    expect(result.ok).toBe(false);
+    if (!result.ok && result.error.kind === 'internal') {
+      expect(result.error.correlationId).toBe('client.call: quota_transport');
+    } else {
+      throw new Error('expected internal error');
+    }
+    expect(fakes.router.callLog).toHaveLength(0);
+
+    // The adapter-provided reason lands in the structured log — the
+    // contract promises "not echoed to callers", but observability is
+    // allowed to see it.
+    const warnCall = fakes.logger.warnings.find(
+      (l) => l.msg === 'llm-client: quota repo transport error',
+    );
+    expect(warnCall).toBeDefined();
+    expect(warnCall!.meta).toMatchObject({ reason: 'connection_refused' });
+    // The raw userId MUST NOT appear in the log meta — only the hash.
+    expect((warnCall!.meta as Record<string, unknown>).userId).toBe(
+      hashUserId(DEFAULT_USER.userId),
+    );
+
+    const rootSpan = exporter
+      .getFinishedSpans()
+      .find((s) => s.name === CLIENT_SPAN_NAME);
+    expect(rootSpan).toBeDefined();
+    expect(rootSpan!.status.code).toBe(SpanStatusCode.ERROR);
+    expect(rootSpan!.status.message).toBe('quota_transport');
   });
 });
 

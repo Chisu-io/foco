@@ -47,6 +47,10 @@ import type { LLMCallInput } from '../../src/client.js';
 import type { EnvelopeCrypto } from '../../src/crypto/envelope.js';
 import type { IdempotencyStore } from '../../src/idempotency/store.js';
 import type {
+  UserQuotaRepo,
+  UserQuotaRepoError,
+} from '../../src/repos/user-quota-repo.js';
+import type {
   PlanRouter,
   RouteInput,
   RouterCallOutput,
@@ -362,6 +366,56 @@ export function asFlushScheduler(f: FakeFlushScheduler): FlushScheduler {
   return f as unknown as FlushScheduler;
 }
 
+// ─── FakeUserQuotaRepo ────────────────────────────────────────────────
+
+/**
+ * In-memory {@link UserQuotaRepo} seeded by default with
+ * `DEFAULT_USER`. Specs override via `seedQuota(user)` for multi-tenant
+ * scenarios, or `seedError({ kind })` for failure-path specs.
+ *
+ * Mirrors the shape the prod adapter will ship from `apps/web/` once
+ * §18.1 is materialised server-side: one row per `userId`, typed return
+ * via `Result<UserQuota, UserQuotaRepoError>`, NEVER throws.
+ */
+export class FakeUserQuotaRepo implements UserQuotaRepo {
+  /** Call-count for assertions ("was the repo consulted once and only once"). */
+  getCalls = 0;
+  /** Last `userId` that landed on `.get()`. */
+  lastGetUserId: string | undefined;
+
+  private readonly store = new Map<string, UserQuota>();
+  private nextError: UserQuotaRepoError | undefined;
+
+  /** Seed a quota row. Called by default in `makeDeps` with DEFAULT_USER. */
+  seedQuota(user: UserQuota): void {
+    this.store.set(user.userId, user);
+  }
+
+  /**
+   * Force the NEXT `get()` call to fail with the given error. After
+   * firing once the error is cleared; subsequent calls fall back to
+   * the `store` lookup.
+   */
+  seedError(e: UserQuotaRepoError): void {
+    this.nextError = e;
+  }
+
+  async get(userId: string): Promise<Result<UserQuota, UserQuotaRepoError>> {
+    this.getCalls += 1;
+    this.lastGetUserId = userId;
+    if (this.nextError !== undefined) {
+      const e = this.nextError;
+      this.nextError = undefined;
+      return err(e);
+    }
+    const hit = this.store.get(userId);
+    if (hit === undefined) {
+      return err({ kind: 'not_found', userId });
+    }
+    return ok(hit);
+  }
+}
+
 // ─── Input builders ───────────────────────────────────────────────────
 
 /**
@@ -370,6 +424,11 @@ export function asFlushScheduler(f: FakeFlushScheduler): FlushScheduler {
  * Managed path — doesn't matter structurally since the router is
  * faked, but keeps the defaults sensible if the fake ever needs to
  * inspect them).
+ *
+ * Callers pass `DEFAULT_USER.userId` to `makeCallInput` (the facade's
+ * `LLMCallInput` now carries just `userId`, not the full quota —
+ * iter 9 c3, §18.1). The full row lives in `FakeUserQuotaRepo` seeded
+ * by `makeDeps`.
  */
 export const DEFAULT_USER: UserQuota = {
   userId: 'user_test_123',
@@ -411,7 +470,7 @@ export function makeCallInput(
   overrides: Partial<LLMCallInput> = {},
 ): LLMCallInput {
   return {
-    user: overrides.user ?? DEFAULT_USER,
+    userId: overrides.userId ?? DEFAULT_USER.userId,
     exposureScope: overrides.exposureScope ?? 'internal',
     origin: overrides.origin ?? 'assistant-conversation',
     request: overrides.request ?? DEFAULT_REQUEST,

@@ -1462,27 +1462,49 @@ tocando un invariante de §2 o la superficie pública de
 antes de mergear; los demás se cierran con commits convencionales
 dentro de iter 9.
 
-### 18.1 · `LLMCallInput` superset → §3.3 exact
+### 18.1 · `LLMCallInput` superset → §3.3 exact — ✅ CERRADO iter 9 c3
 
-**Qué**: hoy `LLMCallInput` acepta `user: UserQuota` más los
-campos §3.3, para que `plan-router` pueda consumir salida del
+**Qué era**: `LLMCallInput` aceptaba `user: UserQuota` más los
+campos §3.3, para que `plan-router` pudiera consumir salida del
 planner sin remapeo. Iter 8 c3 firmó esto como decisión
 delegada #3.
 
-**Por qué deuda**: §3.3 es el contrato firmado. `UserQuota` vive
-en `@chisu/schemas` y es un objeto pesado; aceptarlo en el input
-del facade filtra responsabilidad de resolución de quota hacia el
-caller, cuando §3 dice explícitamente que `LLMClient.call()` recibe
-`userId` y resuelve internamente.
+**Qué cambió (iter 9 c3)**:
 
-**Qué hace iter 9**: introducir `UserQuotaRepo` como DI seam
-(`interface UserQuotaRepo { get(userId): Promise<UserQuota> }`),
-mover la resolución dentro de `client.call()` antes del router,
-y retirar `user: UserQuota` de `LLMCallInput`. El planner pasa a
-construir `NormalizedLLMRequest` puro (§3.3 exact) y el facade
-resuelve quota. Metric sub-span `llm.quota.resolve` (§5.3
-extension). Coste: 1 nuevo archivo (`repos/user-quota-repo.ts`), 1
-edit en `client.ts` (<30 LoC), 1 edit en specs.
+- **Nuevo archivo** `src/repos/user-quota-repo.ts` define la
+  interface `UserQuotaRepo { get(userId): Promise<Result<UserQuota,
+  UserQuotaRepoError>> }` con taxonomía de error narrow
+  (`not_found` / `transport`) — PII-free, adapter-opaque.
+- `LLMCallInput` ahora carga **`userId: string`** (no el quota
+  entero). Matchea §3.3 verbatim.
+- `LLMClientDeps` gana el campo `userQuotaRepo`. El facade lo
+  consulta en un nuevo **step 3.5** (entre zod parse y
+  derivación de idempotencyKey), dentro de un sub-span
+  `llm.quota.resolve` con atributo `user.id_hash` para
+  observabilidad sin leak de id crudo.
+- Dos nuevos `correlationId` estructurados:
+  `client.call: quota_not_found` y `client.call: quota_transport`.
+  Ambos stampean span root ERROR con mensaje
+  `quota_not_found` / `quota_transport` respectivamente. Ningún
+  path toca el router ni el idempotency store.
+- `buildRouteInput` recibe el `UserQuota` resuelto como
+  parámetro separado en lugar de leerlo del input.
+- El constante `QUOTA_RESOLVE_SPAN_NAME = 'llm.quota.resolve'`
+  se exporta para que specs externas (apps/web wiring, iter 10
+  chaos harness) puedan asertar la sub-span sin hardcodear el
+  string.
+
+3 specs nuevas en `test/client/client.test.ts`:
+- Happy path (repo consult + sub-span ok + user propagado al
+  router).
+- Fail `not_found` (internal error con correlation correcto +
+  ambos spans ERROR + no router call).
+- Fail `transport` (internal error + log estructurado con hash
+  de userId, reason no echoeada al caller).
+
+Coste real: 1 archivo nuevo (56 LoC), edit en `client.ts`
+(~75 LoC), `_fakes.ts` gana `FakeUserQuotaRepo` (~50 LoC), 3
+specs nuevas en `client.test.ts` (~110 LoC).
 
 ### 18.2 · `input.idempotencyKey?` override ignorado — ✅ CERRADO iter 9 c2
 

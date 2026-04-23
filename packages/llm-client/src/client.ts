@@ -112,6 +112,7 @@ import type { EnvelopeCrypto } from './crypto/envelope.js';
 import type { Logger } from './observability/logger.js';
 import type { Metrics } from './observability/metrics.js';
 import type { ProviderName } from './providers/provider.js';
+import type { UserQuotaRepo } from './repos/user-quota-repo.js';
 import type { OriginKind } from './routing/events.js';
 import type { FlushScheduler } from './scheduler/flush-scheduler.js';
 import type { NormalizedLLMRequest } from './types/request.js';
@@ -172,6 +173,29 @@ const INTERNAL_REASON_CLOSED = 'client.call: closed';
 const INTERNAL_REASON_INVALID_INPUT = 'client.call: invalid_input';
 
 /**
+ * Structured `correlationId` for the `internal` variant emitted when
+ * `UserQuotaRepo.get()` returns `{ kind: 'not_found' }`. Matches the
+ * precedent set by `INTERNAL_REASON_CLOSED` and
+ * `INTERNAL_REASON_INVALID_INPUT`.
+ */
+const INTERNAL_REASON_QUOTA_NOT_FOUND = 'client.call: quota_not_found';
+
+/**
+ * Structured `correlationId` for the `internal` variant emitted when
+ * `UserQuotaRepo.get()` returns `{ kind: 'transport' }` — i.e. the
+ * repo adapter itself had an IO failure. Not an idempotency- or
+ * call-level retry candidate.
+ */
+const INTERNAL_REASON_QUOTA_TRANSPORT = 'client.call: quota_transport';
+
+/** Span `setStatus` message for quota-resolve failures. */
+const QUOTA_NOT_FOUND_SPAN_MESSAGE = 'quota_not_found';
+const QUOTA_TRANSPORT_SPAN_MESSAGE = 'quota_transport';
+
+/** Name of the sub-span that wraps the repo call. §10.1 extension. */
+export const QUOTA_RESOLVE_SPAN_NAME = 'llm.quota.resolve';
+
+/**
  * Span `setStatus` message for a pre-router deadline expiry. The error
  * returned is `make.networkError(false)` per §7.1; the status message
  * is what dashboards filter on.
@@ -216,21 +240,13 @@ const normalizedLLMRequestSchema = z
   })
   .passthrough();
 
-const userQuotaSchema = z
-  .object({
-    userId: z.string().min(1),
-    plan: z.enum(['free', 'creator', 'influencer', 'celebrity', 'studio']),
-    llmKeyProvider: z.enum(['anthropic', 'openai', 'gemini']).optional(),
-    llmKeyStatus: z
-      .enum(['active', 'pending', 'invalid', 'quota_exhausted', 'unset'])
-      .optional(),
-    llmPreferMyKey: z.boolean().optional(),
-  })
-  .passthrough();
-
 const callInputSchema = z
   .object({
-    user: userQuotaSchema,
+    // §3.3 field — the facade resolves `UserQuota` from this via
+    // `UserQuotaRepo.get(userId)` before routing (iter 9 c3, §18.1).
+    // Prior iter-8 shape had `user: UserQuota` inline; narrowed to
+    // just the id here so the input schema matches §3.3 exactly.
+    userId: z.string().min(1),
     exposureScope: z.enum(['internal', 'mcp-callable']),
     origin: z.enum([
       'assistant-conversation',
@@ -254,20 +270,21 @@ const callInputSchema = z
 // ─── Public types ─────────────────────────────────────────────────────
 
 /**
- * Contract-facing `LLMClient.call()` input.
+ * Contract-facing `LLMClient.call()` input — matches §3.3 of
+ * LLM_CLIENT.md v1.1 exactly.
  *
- * **Iter 8 c3 scope.** This shape is a superset of §3.3 of
- * LLM_CLIENT.md v1.1 for forward-compat — specifically, `user:
- * UserQuota` is here because the router needs it and iter 8 has no
- * `UserQuotaRepo` yet. Iter 9 narrows to §3.3 exactly and introduces a
- * `UserQuotaRepo` DI seam to hydrate `user` server-side.
- *
- * Fields in §3.3 (verbatim): `exposureScope`, `origin`, `request`,
- * `providerHint?`, `traceparent`, `idempotencyKey?`.
+ * Fields in §3.3 (verbatim): `userId`, `exposureScope`, `origin`,
+ * `request`, `providerHint?`, `traceparent`, `idempotencyKey?`.
  *
  * Iter 9 additions (local, no contract bump):
  *  - 18.3: `correlationId?` declared as typed optional field (caller
  *    override preferred over `traceparent` parsing when non-empty).
+ *
+ * Iter 9 c3 (§18.1) narrowed this from the iter-8 superset (which
+ * inlined `user: UserQuota`) to `userId: string`. The facade resolves
+ * the full `UserQuota` via `LLMClientDeps.userQuotaRepo` before any
+ * routing or idempotency work. Callers now pass only an identifier;
+ * the quota row stays server-side.
  *
  * The `idempotencyKey?` caller override is honoured (iter 9 c2,
  * LLM_CLIENT.md §18.2): when provided and non-empty the facade
@@ -278,10 +295,11 @@ const callInputSchema = z
  */
 export interface LLMCallInput {
   /**
-   * Iter 8 c3 superset field. Iter 9 will remove this and add a
-   * `UserQuotaRepo` dep that hydrates `UserQuota` from `userId`.
+   * §3.3. User identifier; the facade resolves the full `UserQuota`
+   * row via `userQuotaRepo.get(userId)` inside `call()` (§18.1 /
+   * iter 9 c3). Must be non-empty (zod-enforced).
    */
-  readonly user: UserQuota;
+  readonly userId: string;
   /**
    * §3.3. Does not flow to the router in c3 — recorded on span and
    * reserved for §7 audit / exposure-scope gating in iter 9+.
@@ -386,6 +404,12 @@ export interface LLMClientDeps {
   readonly tracer: Tracer;
   readonly logger: Logger;
   readonly clock: Clock;
+  /**
+   * Repo used by `call()` to resolve `UserQuota` from `userId`.
+   * Added iter 9 c3 (§18.1) — cierra la dependencia implícita que
+   * iter 8 c3 tenía sobre un callsite que pasaba `user` inline.
+   */
+  readonly userQuotaRepo: UserQuotaRepo;
   readonly config?: LLMClientConfig | undefined;
 }
 
@@ -498,7 +522,86 @@ export class LLMClient {
         return err(make.internal(INTERNAL_REASON_INVALID_INPUT));
       }
 
-      // Step 4 — key derivation. `promptHash` is the full 64-char
+      // Step 4 — inflight registration (pre-quota-resolve). Moved to
+      // this position in iter 9 c3 so the quota resolve `await`
+      // counts against `close()`'s drain budget — otherwise a caller
+      // that invokes `close()` right after `call()` would see a drain
+      // snapshot that is empty (the inflight had not yet been added
+      // because the facade was parked on `userQuotaRepo.get()`). Since
+      // the registration now happens BEFORE the idempotency lookup
+      // too, HIT paths transiently touch the gauge; per `close()`'s
+      // semantics this is the correct trade-off.
+      inflightPromise = new Promise<void>((resolve) => {
+        resolveInflight = resolve;
+      });
+      this.inflight.add(inflightPromise);
+      this.deps.metrics.gauge(INFLIGHT_GAUGE, this.inflight.size);
+
+      // Step 5 — quota resolve (iter 9 c3, §18.1). The facade no
+      // longer accepts an inline `user: UserQuota`; the repo seam
+      // hydrates it from `userId` inside its own sub-span so failures
+      // are observable end-to-end without polluting the root span with
+      // `llm.quota.*` attrs.
+      //
+      // Two failure modes:
+      //   - `not_found`: the userId does not map to a row. Emitted as
+      //     `internal: 'client.call: quota_not_found'` with span
+      //     status ERROR + message `quota_not_found`.
+      //   - `transport`: repo IO failure. Emitted as
+      //     `internal: 'client.call: quota_transport'` — the reason
+      //     string from the repo (already PII-free by contract) is
+      //     only logged, not returned, per the same precedent as
+      //     `invalid_input`.
+      const quotaSpan = this.deps.tracer.startSpan(
+        QUOTA_RESOLVE_SPAN_NAME,
+        { kind: SpanKind.INTERNAL, attributes: { 'user.id_hash': hashUserId(input.userId) } },
+      );
+      let user: UserQuota;
+      try {
+        const quotaResult = await context.with(
+          trace.setSpan(context.active(), quotaSpan),
+          async () => this.deps.userQuotaRepo.get(input.userId),
+        );
+        if (!quotaResult.ok) {
+          if (quotaResult.error.kind === 'not_found') {
+            quotaSpan.setStatus({
+              code: SpanStatusCode.ERROR,
+              message: QUOTA_NOT_FOUND_SPAN_MESSAGE,
+            });
+            const latencyMs = this.deps.clock() - start;
+            span.setAttribute('llm.internal_reason', 'quota_not_found');
+            span.setAttribute('llm.latency_ms', latencyMs);
+            span.setStatus({
+              code: SpanStatusCode.ERROR,
+              message: QUOTA_NOT_FOUND_SPAN_MESSAGE,
+            });
+            return err(make.internal(INTERNAL_REASON_QUOTA_NOT_FOUND));
+          }
+          // transport
+          this.deps.logger.warn('llm-client: quota repo transport error', {
+            userId: hashUserId(input.userId),
+            reason: quotaResult.error.reason,
+          });
+          quotaSpan.setStatus({
+            code: SpanStatusCode.ERROR,
+            message: QUOTA_TRANSPORT_SPAN_MESSAGE,
+          });
+          const latencyMs = this.deps.clock() - start;
+          span.setAttribute('llm.internal_reason', 'quota_transport');
+          span.setAttribute('llm.latency_ms', latencyMs);
+          span.setStatus({
+            code: SpanStatusCode.ERROR,
+            message: QUOTA_TRANSPORT_SPAN_MESSAGE,
+          });
+          return err(make.internal(INTERNAL_REASON_QUOTA_TRANSPORT));
+        }
+        user = quotaResult.value;
+        quotaSpan.setStatus({ code: SpanStatusCode.OK });
+      } finally {
+        quotaSpan.end();
+      }
+
+      // Step 6 — key derivation. `promptHash` is the full 64-char
       // lowercase SHA-256 of the canonicalised request (§8 #1). The
       // idempotency key hashes `(userId + promptHash + model)` again
       // so the raw userId does not leak into the cache key space.
@@ -509,7 +612,7 @@ export class LLMClient {
       // fall through to the derived 3-tuple.
       const promptHash = hashNormalizedRequest(input.request);
       const idemKey = buildIdempotencyKey(
-        input.user.userId,
+        input.userId,
         promptHash,
         input.request.model,
         input.idempotencyKey,
@@ -524,17 +627,6 @@ export class LLMClient {
         'trace.idempotency_key_hash',
         hashIdempotencyKey(idemKey),
       );
-
-      // Step 5 — inflight registration (pre-lookup). Done BEFORE the
-      // async idempotency lookup so `close()` can snapshot calls that
-      // are still pending on the cache read, not only on the router.
-      // HIT path is still single-tick-fast; the gauge transient is
-      // negligible and the `close()` drain semantics win.
-      inflightPromise = new Promise<void>((resolve) => {
-        resolveInflight = resolve;
-      });
-      this.inflight.add(inflightPromise);
-      this.deps.metrics.gauge(INFLIGHT_GAUGE, this.inflight.size);
 
       // Step 6 — idempotency lookup. HIT short-circuits the call: no
       // router invocation, no flush notification. The span gets
@@ -613,6 +705,7 @@ export class LLMClient {
           : deriveCorrelationId(input.traceparent);
       const routeInput = this.buildRouteInput(
         input,
+        user,
         correlationId,
         composed,
       );
@@ -743,9 +836,8 @@ export class LLMClient {
     if (input.origin.length > 0) {
       attrs['llm.origin'] = input.origin;
     }
-    const userId = input.user.userId;
-    if (userId.length > 0) {
-      attrs['user.id_hash'] = hashUserId(userId);
+    if (input.userId.length > 0) {
+      attrs['user.id_hash'] = hashUserId(input.userId);
     }
     return this.deps.tracer.startSpan(CLIENT_SPAN_NAME, {
       kind: SpanKind.CLIENT,
@@ -754,12 +846,17 @@ export class LLMClient {
   }
 
   /**
-   * Translate the facade's `LLMCallInput` into the router's
-   * `RouteInput`. The two shapes are deliberately not identical —
-   * `exposureScope` / `traceparent` / `idempotencyKey` /
+   * Translate the facade's `LLMCallInput` + resolved `UserQuota` into
+   * the router's `RouteInput`. The two shapes are deliberately not
+   * identical — `exposureScope` / `traceparent` / `idempotencyKey` /
    * `correlationId` are facade-level concerns; `correlationId` is
-   * resolved here (typed `input.correlationId` override preferred
+   * resolved upstream (typed `input.correlationId` override preferred
    * over `deriveCorrelationId(input.traceparent)` when non-empty).
+   *
+   * `user` is passed separately (not read from `input`) because iter 9
+   * c3 narrowed `LLMCallInput` to `userId: string`; the full
+   * `UserQuota` is hydrated by `userQuotaRepo.get()` in `call()` before
+   * this helper runs.
    *
    * `exactOptionalPropertyTypes` makes `{ foo: undefined }`
    * structurally different from `{}`, so we only attach `providerHint`
@@ -767,11 +864,12 @@ export class LLMClient {
    */
   private buildRouteInput(
     input: LLMCallInput,
+    user: UserQuota,
     correlationId: string,
     composed: AbortSignal | undefined,
   ): RouteInput {
     const base = {
-      user: input.user,
+      user,
       request: input.request,
       correlationId,
       origin: input.origin,
