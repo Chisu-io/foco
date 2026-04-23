@@ -130,10 +130,24 @@ export default tseslint.config(
   },
 
   // ------------------------------------------------------------------
-  // Tests: relax the strictest rules that don't pay off in test code.
+  // Tests + test fakes: relax the strictest rules that don't pay off
+  // in test code. We include `**/_fakes.ts`, `**/_fake-*.ts` and any
+  // file under `**/test/**` because our fakes implement production
+  // interfaces (e.g. `KEKProvider`, `IdempotencyStore`, `ConsentReader`)
+  // whose methods are typed `Promise<T>` — forcing a no-op `await` just
+  // to satisfy `require-await` would be noise with zero signal.
+  //
+  // `no-misused-promises` is also off in tests because fake timers +
+  // event callbacks (`setTimeout`, `queueMicrotask`, `.then(reject)`)
+  // deliberately pass async arrows into void-return slots as a test
+  // hook; the production rule stays on to catch real accidents.
   // ------------------------------------------------------------------
   {
-    files: ['**/*.{test,spec}.{ts,tsx}', '**/__tests__/**/*.{ts,tsx}'],
+    files: [
+      '**/*.{test,spec}.{ts,tsx}',
+      '**/__tests__/**/*.{ts,tsx}',
+      '**/test/**/*.{ts,tsx}',
+    ],
     rules: {
       '@typescript-eslint/no-explicit-any': 'off',
       '@typescript-eslint/no-non-null-assertion': 'off',
@@ -142,6 +156,8 @@ export default tseslint.config(
       '@typescript-eslint/no-unsafe-member-access': 'off',
       '@typescript-eslint/no-unsafe-return': 'off',
       '@typescript-eslint/unbound-method': 'off',
+      '@typescript-eslint/require-await': 'off',
+      '@typescript-eslint/no-misused-promises': 'off',
     },
   },
 
