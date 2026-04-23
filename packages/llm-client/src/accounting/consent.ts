@@ -168,13 +168,13 @@ export function createConsentResolverFromRepo(
   if (!Number.isFinite(ttlMs) || ttlMs < 0) {
     throw new Error(
       `createConsentResolverFromRepo: cacheTtlMs must be a non-negative ` +
-        `finite number (got ${ttlMs}).`,
+        `finite number (got ${String(ttlMs)}).`,
     );
   }
   if (!Number.isInteger(maxEntries) || maxEntries < 1) {
     throw new Error(
       `createConsentResolverFromRepo: cacheMaxEntries must be a positive ` +
-        `integer (got ${maxEntries}).`,
+        `integer (got ${String(maxEntries)}).`,
     );
   }
 

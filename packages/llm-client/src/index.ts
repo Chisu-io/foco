@@ -98,6 +98,16 @@
  *   The `LLMCallInput` type is a superset of `NormalizedLLMRequest`
  *   so callers can pass planner output unchanged.
  *
+ * Iter 9 commit 1 (pendiente 18.3) promoted `correlationId?: string`
+ *   from `.passthrough()`-only into a typed optional field on
+ *   `LLMCallInput`. Resolution order in the facade: (1) non-empty
+ *   `input.correlationId` caller override wins verbatim,
+ *   (2) `deriveCorrelationId(input.traceparent)` parses the 32-char
+ *   traceId, (3) fresh `randomUUID()` fallback inside
+ *   `deriveCorrelationId`. Local to `@chisu/llm-client` — does NOT
+ *   touch `@chisu/schemas` nor require semver bump nor re-firma.
+ *   See `docs/LLM_CLIENT.md` §18.3.
+ *
  * @see ../../../docs/LLM_CLIENT.md — the signed contract this
  *      package implements (v1.1 SIGNED, 2026-04-18).
  */

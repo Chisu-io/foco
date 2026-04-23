@@ -33,7 +33,7 @@ export class UnknownKekVersionError extends Error {
 
   constructor(kekVersion: number) {
     super(
-      `Unknown kekVersion ${kekVersion}. Register it in ` +
+      `Unknown kekVersion ${String(kekVersion)}. Register it in ` +
         `packages/llm-client/src/crypto/sharding.ts (SHARD_COUNTS) ` +
         'alongside the KMS alias provisioning and §5.3 rebalance runbook.',
     );

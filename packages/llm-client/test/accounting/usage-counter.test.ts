@@ -17,6 +17,12 @@
  *     `test/observability/tracing.test.ts`.
  */
 
+import { SpanKind, SpanStatusCode } from '@opentelemetry/api';
+import {
+  BasicTracerProvider,
+  InMemorySpanExporter,
+  SimpleSpanProcessor,
+} from '@opentelemetry/sdk-trace-base';
 import {
   afterEach,
   beforeEach,
@@ -24,12 +30,6 @@ import {
   expect,
   it,
 } from 'vitest';
-import { SpanKind, SpanStatusCode } from '@opentelemetry/api';
-import {
-  BasicTracerProvider,
-  InMemorySpanExporter,
-  SimpleSpanProcessor,
-} from '@opentelemetry/sdk-trace-base';
 
 import {
   USAGE_BUFFER_SIZE_GAUGE,
@@ -424,11 +424,11 @@ describe('llm.accounting.write sub-span', () => {
     expect(span.name).toBe(USAGE_WRITE_SPAN_NAME);
     expect(span.kind).toBe(SpanKind.CLIENT);
     expect(span.attributes['llm.provider']).toBe('anthropic');
-    expect(span.attributes['consent_mode']).toBe('full');
-    expect(span.attributes['funding_mode']).toBe('byok');
-    expect(span.attributes['origin']).toBe('assistant-conversation');
+    expect(span.attributes.consent_mode).toBe('full');
+    expect(span.attributes.funding_mode).toBe('byok');
+    expect(span.attributes.origin).toBe('assistant-conversation');
     expect(span.attributes['kek.version']).toBe(12);
-    expect(span.attributes['result']).toBe('ok');
+    expect(span.attributes.result).toBe('ok');
     expect(span.status.code).toBe(SpanStatusCode.OK);
   });
 
@@ -443,7 +443,7 @@ describe('llm.accounting.write sub-span', () => {
 
     const span = exporter.getFinishedSpans()[0]!;
     expect('kek.version' in span.attributes).toBe(false);
-    expect(span.attributes['funding_mode']).toBe('managed');
+    expect(span.attributes.funding_mode).toBe('managed');
   });
 
   it('sets ERROR status with message=reason when the writer fails and entry is buffered', async () => {
@@ -456,7 +456,7 @@ describe('llm.accounting.write sub-span', () => {
     const span = exporter.getFinishedSpans()[0]!;
     expect(span.status.code).toBe(SpanStatusCode.ERROR);
     expect(span.status.message).toBe('timeout');
-    expect(span.attributes['result']).toBe('buffered');
+    expect(span.attributes.result).toBe('buffered');
     // No recordException — accounting spans must not leak the raw
     // writer error into the OTel event bag.
     expect(span.events).toHaveLength(0);
@@ -479,7 +479,7 @@ describe('llm.accounting.write sub-span', () => {
     const span = exporter.getFinishedSpans()[0]!;
     expect(span.status.code).toBe(SpanStatusCode.ERROR);
     expect(span.status.message).toBe('buffer_full');
-    expect(span.attributes['result']).toBe('dropped');
+    expect(span.attributes.result).toBe('dropped');
   });
 
   it('never stamps prohibited attributes (user_id, prompt_hash, trace_id, api_key)', async () => {

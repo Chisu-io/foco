@@ -25,6 +25,12 @@
  *    right args.
  */
 
+import { SpanStatusCode } from '@opentelemetry/api';
+import {
+  BasicTracerProvider,
+  InMemorySpanExporter,
+  SimpleSpanProcessor,
+} from '@opentelemetry/sdk-trace-base';
 import {
   afterEach,
   beforeEach,
@@ -34,13 +40,27 @@ import {
   vi,
 } from 'vitest';
 
-import {
-  BasicTracerProvider,
-  InMemorySpanExporter,
-  SimpleSpanProcessor,
-} from '@opentelemetry/sdk-trace-base';
-import { SpanStatusCode } from '@opentelemetry/api';
 
+import {
+  asEnvelopeCrypto,
+  asFlushScheduler,
+  asUsageBuffer,
+  DEFAULT_CORRELATION_ID,
+  DEFAULT_REQUEST,
+  DEFAULT_TRACEPARENT,
+  DEFAULT_USER,
+  FakeClock,
+  FakeEnvelopeCrypto,
+  FakeFlushScheduler,
+  FakeIdempotencyStore,
+  FakeLogger,
+  FakePlanRouter,
+  FakeUsageBuffer,
+  makeCallInput,
+  makeRouterCallOutput,
+  okRouterOutput,
+} from './_fakes.js';
+import { hashNormalizedRequest } from '../../src/accounting/prompt-hash.js';
 import {
   CLIENT_SPAN_NAME,
   CLOSE_DRAINED_COUNTER,
@@ -65,28 +85,7 @@ import {
   resetTracer,
   setTracer,
 } from '../../src/observability/tracing.js';
-import { hashNormalizedRequest } from '../../src/accounting/prompt-hash.js';
 import { err, ok } from '../../src/types.js';
-
-import {
-  asEnvelopeCrypto,
-  asFlushScheduler,
-  asUsageBuffer,
-  DEFAULT_CORRELATION_ID,
-  DEFAULT_REQUEST,
-  DEFAULT_TRACEPARENT,
-  DEFAULT_USER,
-  FakeClock,
-  FakeEnvelopeCrypto,
-  FakeFlushScheduler,
-  FakeIdempotencyStore,
-  FakeLogger,
-  FakePlanRouter,
-  FakeUsageBuffer,
-  makeCallInput,
-  makeRouterCallOutput,
-  okRouterOutput,
-} from './_fakes.js';
 
 // ─── OTel test harness ────────────────────────────────────────────────
 
@@ -636,7 +635,7 @@ describe('LLMClient — span attributes', () => {
     expect(span!.attributes['trace.idempotency_key_hash']).not.toBe(
       expectedDefaultIdempotencyKey(),
     );
-    expect(span!.attributes['fromIdempotencyCache']).toBe(false);
+    expect(span!.attributes.fromIdempotencyCache).toBe(false);
   });
 
   it('idempotency HIT stamps fromIdempotencyCache=true + llm.latency_ms, no router subspans', async () => {
@@ -666,7 +665,7 @@ describe('LLMClient — span attributes', () => {
       .getFinishedSpans()
       .find((s) => s.name === CLIENT_SPAN_NAME);
     expect(span).toBeDefined();
-    expect(span!.attributes['fromIdempotencyCache']).toBe(true);
+    expect(span!.attributes.fromIdempotencyCache).toBe(true);
     expect(typeof span!.attributes['llm.latency_ms']).toBe('number');
     expect(span!.status.code).toBe(SpanStatusCode.OK);
   });
@@ -689,6 +688,33 @@ describe('LLMClient.call — providerHint propagation', () => {
     const client = new LLMClient(fakes.deps);
 
     await client.call(makeCallInput());
+
+    expect(fakes.router.callLog[0]!.correlationId).toBe(DEFAULT_CORRELATION_ID);
+  });
+
+  // iter 9 pendiente 18.3 — typed `correlationId?` override.
+  it('uses input.correlationId verbatim when provided and non-empty', async () => {
+    const fakes = makeDeps();
+    fakes.router.enqueue(okRouterOutput());
+    const client = new LLMClient(fakes.deps);
+    const callerId = 'job-7f3a1b-replay-2';
+
+    await client.call(makeCallInput({ correlationId: callerId }));
+
+    // Caller-supplied id wins over the traceparent-derived one.
+    expect(fakes.router.callLog[0]!.correlationId).toBe(callerId);
+    expect(fakes.router.callLog[0]!.correlationId).not.toBe(
+      DEFAULT_CORRELATION_ID,
+    );
+  });
+
+  // iter 9 pendiente 18.3 — empty string falls back to traceparent parse.
+  it('falls back to traceparent parse when input.correlationId is an empty string', async () => {
+    const fakes = makeDeps();
+    fakes.router.enqueue(okRouterOutput());
+    const client = new LLMClient(fakes.deps);
+
+    await client.call(makeCallInput({ correlationId: '' }));
 
     expect(fakes.router.callLog[0]!.correlationId).toBe(DEFAULT_CORRELATION_ID);
   });
@@ -727,7 +753,7 @@ describe('LLMClient.call — defensive throw handling', () => {
     }
     expect(
       fakes.logger.warnings.some((w) =>
-        /unexpected throw in call/.test(w.msg),
+        w.msg.includes('unexpected throw in call'),
       ),
     ).toBe(true);
   });

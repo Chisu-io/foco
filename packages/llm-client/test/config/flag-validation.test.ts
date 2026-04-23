@@ -36,7 +36,7 @@ describe('FLAG_DEFAULTS', () => {
 
   it('is frozen — mutation attempts throw in strict mode', () => {
     expect(() => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+       
       (FLAG_DEFAULTS as any)['llm.kms.retry_count'] = 99;
     }).toThrow();
   });
@@ -67,7 +67,7 @@ describe('validateFlags', () => {
   it('rejects non-finite numbers (NaN, Infinity, strings)', () => {
     for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, '50' as unknown as number]) {
       const result = validateFlags(
-        valid({ 'llm.kms.retry_jitter_ms_min': bad as number }),
+        valid({ 'llm.kms.retry_jitter_ms_min': bad }),
       );
       expect(result.ok).toBe(false);
       if (!result.ok) {

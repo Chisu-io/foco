@@ -183,6 +183,7 @@ function toTransportError(e: unknown): HttpTransportError {
     case 'CERT_HAS_EXPIRED':
     case 'UNABLE_TO_VERIFY_LEAF_SIGNATURE':
       return new HttpTransportError('tls', message, { cause: e });
+    case undefined:
     default:
       return new HttpTransportError('other', message, { cause: e });
   }

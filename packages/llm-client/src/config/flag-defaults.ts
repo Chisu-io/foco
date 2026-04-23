@@ -168,9 +168,7 @@ export const LLM_FLAGS = Object.freeze({
  * the package consumes — `LLMFlagSpec` is metadata, `LLMFlagValues`
  * is a record of numbers keyed by name.
  */
-export type LLMFlagValues = {
-  readonly [K in LLMFlagName]: number;
-};
+export type LLMFlagValues = Readonly<Record<LLMFlagName, number>>;
 
 /**
  * The defaults of §16 as a plain `LLMFlagValues` record. Use this as

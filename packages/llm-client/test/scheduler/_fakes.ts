@@ -24,7 +24,7 @@ import type {
  * `Logger` surface so the fake has only one method.
  */
 export class FakeLogger implements Logger {
-  readonly warnings: Array<{ msg: string; meta: LogMeta | undefined }> = [];
+  readonly warnings: { msg: string; meta: LogMeta | undefined }[] = [];
 
   warn(msg: string, meta?: LogMeta): void {
     this.warnings.push({ msg, meta });

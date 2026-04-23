@@ -29,16 +29,15 @@
 
 import {
   DecryptCommand,
-  type DecryptCommandOutput,
   EncryptCommand,
-  type EncryptCommandOutput,
   type KMSClient,
 } from '@aws-sdk/client-kms';
 
 import { classifyKmsError } from '../errors/classify.js';
 import { make, type LLMCallError } from '../errors/taxonomy.js';
-import type { Metrics } from '../observability/metrics.js';
 import { err, ok, type Result } from '../types.js';
+
+import type { Metrics } from '../observability/metrics.js';
 
 /** The KMS operations we instrument. */
 export type KmsOperation = 'encrypt' | 'decrypt';
@@ -60,7 +59,7 @@ export function kekAlias(input: {
   if (!Number.isInteger(input.shardId) || input.shardId < 0) {
     throw new Error(`kekAlias: shardId must be a non-negative integer.`);
   }
-  return `alias/foco/kek/v${input.kekVersion}/shard-${input.shardId}`;
+  return `alias/foco/kek/v${String(input.kekVersion)}/shard-${String(input.shardId)}`;
 }
 
 /** Dependencies required by every KMS operation. */
@@ -128,7 +127,7 @@ export async function kmsEncrypt(
     // `KMSClient.send` returns the open `ServiceOutputTypes` union —
     // narrow to the concrete command output here. The shape is
     // guaranteed by the SDK contract for `EncryptCommand`.
-    const out = (await deps.kms.send(cmd)) as EncryptCommandOutput;
+    const out = (await deps.kms.send(cmd));
     const blob = out.CiphertextBlob;
     if (!blob || blob.length === 0) {
       // Shouldn't happen per SDK contract, but treat as internal-
@@ -160,7 +159,7 @@ export async function kmsDecrypt(
     });
     // Narrow `ServiceOutputTypes` → `DecryptCommandOutput` (see
     // equivalent note in `kmsEncrypt`).
-    const out = (await deps.kms.send(cmd)) as DecryptCommandOutput;
+    const out = (await deps.kms.send(cmd));
     const blob = out.Plaintext;
     if (!blob || blob.length === 0) {
       const syntheticError = Object.assign(
@@ -187,7 +186,7 @@ async function attempt<T>(
   const jitterMax = opts.jitterMaxMs ?? DEFAULT_JITTER_MAX_MS;
   if (jitterMin >= jitterMax) {
     throw new Error(
-      `kmsCall: jitterMinMs (${jitterMin}) must be < jitterMaxMs (${jitterMax}).`,
+      `kmsCall: jitterMinMs (${String(jitterMin)}) must be < jitterMaxMs (${String(jitterMax)}).`,
     );
   }
 

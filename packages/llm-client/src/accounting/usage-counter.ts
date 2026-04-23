@@ -59,12 +59,13 @@
 
 import { SpanKind, SpanStatusCode } from '@opentelemetry/api';
 
-import type { Metrics } from '../observability/metrics.js';
 import { getTracer } from '../observability/tracing.js';
+
+import type { Metrics } from '../observability/metrics.js';
 import type { ProviderName } from '../providers/provider.js';
 import type { OriginKind } from '../routing/events.js';
-import type { ModelId } from '../types/request.js';
 import type { ConsentMode } from '../types/repos.js';
+import type { ModelId } from '../types/request.js';
 
 // ─── Public shapes ─────────────────────────────────────────────────────
 
@@ -188,7 +189,7 @@ export class UsageBuffer {
   constructor(public readonly capacity: number = DEFAULT_BUFFER_CAPACITY) {
     if (!Number.isInteger(capacity) || capacity < 1) {
       throw new Error(
-        `UsageBuffer: capacity must be a positive integer (got ${capacity}).`,
+        `UsageBuffer: capacity must be a positive integer (got ${String(capacity)}).`,
       );
     }
   }

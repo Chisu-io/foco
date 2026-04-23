@@ -55,8 +55,8 @@ export class DekInvariantError extends Error {
 function assertDek(dek: Buffer): void {
   if (!(dek instanceof Buffer) || dek.length !== DEK_BYTES) {
     throw new DekInvariantError(
-      `DEK must be a ${DEK_BYTES}-byte Buffer (got length=${
-        dek instanceof Buffer ? dek.length : typeof dek
+      `DEK must be a ${String(DEK_BYTES)}-byte Buffer (got length=${
+        dek instanceof Buffer ? String(dek.length) : typeof dek
       }).`,
     );
   }
@@ -97,7 +97,7 @@ export function encryptWithDek(plaintext: Buffer, dek: Buffer): DekCiphertext {
   // default, but be defensive in case a node version ever disagrees.
   if (authTag.length !== GCM_AUTH_TAG_BYTES) {
     throw new DekInvariantError(
-      `Unexpected GCM tag size ${authTag.length}; expected ${GCM_AUTH_TAG_BYTES}.`,
+      `Unexpected GCM tag size ${String(authTag.length)}; expected ${String(GCM_AUTH_TAG_BYTES)}.`,
     );
   }
   return { ciphertext, nonce, authTag };
@@ -122,12 +122,12 @@ export function decryptWithDek(env: DekCiphertext, dek: Buffer): Buffer {
   }
   if (env.nonce.length !== GCM_NONCE_BYTES) {
     throw new DekInvariantError(
-      `nonce must be ${GCM_NONCE_BYTES} bytes (got ${env.nonce.length}).`,
+      `nonce must be ${String(GCM_NONCE_BYTES)} bytes (got ${String(env.nonce.length)}).`,
     );
   }
   if (env.authTag.length !== GCM_AUTH_TAG_BYTES) {
     throw new DekInvariantError(
-      `authTag must be ${GCM_AUTH_TAG_BYTES} bytes (got ${env.authTag.length}).`,
+      `authTag must be ${String(GCM_AUTH_TAG_BYTES)} bytes (got ${String(env.authTag.length)}).`,
     );
   }
 

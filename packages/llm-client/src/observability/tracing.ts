@@ -39,6 +39,7 @@
  */
 
 import { createHash } from 'node:crypto';
+
 import {
   SpanKind,
   SpanStatusCode,

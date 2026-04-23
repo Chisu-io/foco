@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
-import { describe, expect, it } from 'vitest';
+
 import fc from 'fast-check';
+import { describe, expect, it } from 'vitest';
 
 import {
   DEK_BYTES,
@@ -136,7 +137,7 @@ describe('zeroize', () => {
   });
 
   it('tolerates null / undefined', () => {
-    expect(() => zeroize(null)).not.toThrow();
-    expect(() => zeroize(undefined)).not.toThrow();
+    expect(() => { zeroize(null); }).not.toThrow();
+    expect(() => { zeroize(undefined); }).not.toThrow();
   });
 });

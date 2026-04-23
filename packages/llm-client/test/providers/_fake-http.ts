@@ -17,8 +17,9 @@
  *     without using timers.
  */
 
-import type { HttpClient, HttpRequest, HttpResponse } from '../../src/http/client.js';
 import { HttpTransportError } from '../../src/http/client.js';
+
+import type { HttpClient, HttpRequest, HttpResponse } from '../../src/http/client.js';
 
 export interface FakeHttpClient {
   readonly fn: HttpClient;

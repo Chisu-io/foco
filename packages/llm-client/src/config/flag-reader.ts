@@ -33,7 +33,7 @@ export interface FlagsReader {
    * §16 invariants holding (ranges + cross-invariants); validate at
    * boot with `validateFlags`, not on every read.
    */
-  get<K extends LLMFlagName>(name: K): number;
+  get(name: LLMFlagName): number;
 }
 
 /**

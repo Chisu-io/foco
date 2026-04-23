@@ -67,18 +67,17 @@
  * @see events.ts — `CircuitStateChangeEvent` shape
  */
 
-import type {
-  SystemActor,
-  SystemActorKind,
-  SystemAuditEntry,
-} from '@chisu/schemas';
-
 import type { Metrics } from '../observability/metrics.js';
 import type { Result } from '../types.js';
 import type {
   CircuitStateChangeEvent,
   OnCircuitStateChange,
 } from './events.js';
+import type {
+  SystemActor,
+  SystemActorKind,
+  SystemAuditEntry,
+} from '@chisu/schemas';
 
 // ─── Types ───────────────────────────────────────────────────────────
 
@@ -211,8 +210,8 @@ function buildDetails(
 ): Readonly<Record<string, string | number>> {
   if (action === 'llm.circuit_opened') {
     const base: Record<string, string | number> = { reason: event.reason };
-    if (event.errorRate !== undefined) base['errorRate'] = event.errorRate;
-    if (event.volume !== undefined) base['volume'] = event.volume;
+    if (event.errorRate !== undefined) base.errorRate = event.errorRate;
+    if (event.volume !== undefined) base.volume = event.volume;
     return base;
   }
   // half-open → closed
@@ -232,7 +231,10 @@ export function buildAuditDraft(
   // The event carries the transition timestamp (`event.at`). Prefer
   // that — it's the authoritative moment the transition happened. We
   // still accept `deps.now` so tests can pin the clock even when the
-  // event's `at` isn't stable.
+  // event's `at` isn't stable. The type says `at: number`, but tests
+  // exercise the adversarial `at: undefined` shape via cast to
+  // guarantee the fallback stays wired — hence the per-line disable.
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- defensive fallback for fixtures that construct events without `at` via cast.
   const at = event.at ?? nowFn();
   const actor: SystemActor = deps.actor ?? { kind: 'system' };
   const draft: AuditEntryDraft = {
@@ -326,7 +328,7 @@ function writeAndReport(
         reason: res.error.kind,
       });
     },
-    (rejection) => {
+    (rejection: unknown) => {
       // The writer promise rejected (non-Result rejection).
       safeBumpFailure(deps, action, 'internal');
       safeLog(deps, 'audit_write_unexpected', {

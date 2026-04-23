@@ -32,9 +32,22 @@
  *     status 503 to the classifier (same semantics).
  */
 
+import { classifyNetworkError } from '../errors/classify.js';
 import { classifyProviderHttpError } from '../errors/classify.js';
 import { make, type LLMCallError } from '../errors/taxonomy.js';
+import {
+  fetchHttpClient,
+  HttpTransportError,
+  transportKindToNetworkKind,
+  type HttpClient,
+} from '../http/client.js';
 import { err, ok, type Result } from '../types.js';
+
+import type {
+  Provider,
+  ProviderCallInput,
+  ProviderPingInput,
+} from './provider.js';
 import type {
   NormalizedContentBlock,
   NormalizedLLMRequest,
@@ -46,18 +59,6 @@ import type {
   StopReason,
   UsageCounts,
 } from '../types/response.js';
-import {
-  fetchHttpClient,
-  HttpTransportError,
-  transportKindToNetworkKind,
-  type HttpClient,
-} from '../http/client.js';
-import { classifyNetworkError } from '../errors/classify.js';
-import type {
-  Provider,
-  ProviderCallInput,
-  ProviderPingInput,
-} from './provider.js';
 
 /** Current stable Anthropic Messages API version. */
 export const ANTHROPIC_API_VERSION = '2023-06-01';
@@ -238,10 +239,10 @@ function authHeaders(
 interface AnthropicRequestBody {
   model: string;
   max_tokens: number;
-  messages: ReadonlyArray<{
+  messages: readonly {
     role: 'user' | 'assistant';
     content: string | readonly AnthropicContentOut[];
-  }>;
+  }[];
   system?: string;
   temperature?: number;
   stop_sequences?: readonly string[];
@@ -357,7 +358,7 @@ interface AnthropicResponseBody {
   type?: string;
   role?: 'assistant';
   model?: string;
-  content?: ReadonlyArray<AnthropicContentIn>;
+  content?: readonly AnthropicContentIn[];
   stop_reason?: string;
   stop_sequence?: string | null;
   usage?: {
@@ -375,31 +376,68 @@ type AnthropicContentIn =
       input: Record<string, unknown>;
     };
 
+/**
+ * Narrowed view after the boot-check. Equivalent to
+ * `AnthropicResponseBody` with the five fields the parser requires
+ * asserted present (`message` type, non-empty content array,
+ * usage/stop_reason/model all defined). The predicate below is the
+ * sole way to land on this shape.
+ */
+interface ValidAnthropicResponseBody extends AnthropicResponseBody {
+  type: 'message';
+  content: readonly AnthropicContentIn[];
+  stop_reason: string;
+  model: string;
+  usage: {
+    input_tokens?: number;
+    output_tokens?: number;
+  };
+}
+
+function isAnthropicResponseBody(
+  u: unknown,
+): u is ValidAnthropicResponseBody {
+  if (typeof u !== 'object' || u === null) return false;
+  const o = u as Record<string, unknown>;
+  if (o.type !== 'message') return false;
+  if (!Array.isArray(o.content)) return false;
+  if (typeof o.stop_reason !== 'string') return false;
+  if (typeof o.model !== 'string') return false;
+  if (typeof o.usage !== 'object' || o.usage === null) return false;
+  // Each content block is validated inline in the loop — cheaper
+  // than a double pass, and the loop already discriminates by
+  // `block.type`. Per-block unknown shapes are defensively ignored
+  // rather than rejecting the whole envelope.
+  return true;
+}
+
 function parseCallResponse(
   raw: string,
   headers: Readonly<Record<string, string>>,
 ): Result<ProviderCallOutput, LLMCallError> {
-  let parsed: AnthropicResponseBody;
+  // Parse to `unknown` first so the `no-unsafe-*` family doesn't
+  // taint every downstream access via `JSON.parse`'s `any` return.
+  // The narrow-to-shape happens through the `isAnthropicResponseBody`
+  // predicate below, which is a single chokepoint any future
+  // shape-validation tightening would pass through.
+  let parsedUnknown: unknown;
   try {
-    parsed = JSON.parse(raw) as AnthropicResponseBody;
+    parsedUnknown = JSON.parse(raw);
   } catch {
     return err(classifyProviderHttpError({ provider: 'anthropic', status: 500 }));
   }
 
-  if (
-    parsed.type !== 'message' ||
-    !Array.isArray(parsed.content) ||
-    parsed.usage === undefined ||
-    parsed.stop_reason === undefined ||
-    parsed.model === undefined
-  ) {
+  if (!isAnthropicResponseBody(parsedUnknown)) {
     return err(classifyProviderHttpError({ provider: 'anthropic', status: 500 }));
   }
+
+  const parsed = parsedUnknown;
 
   const content: NormalizedContentBlock[] = [];
   for (const block of parsed.content) {
     if (block.type === 'text') {
       content.push({ type: 'text', text: block.text });
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- defensive filter: the wire may ship unknown block types (e.g. new variants from a future API version) that the predicate intentionally didn't reject; an explicit discriminator prevents pushing malformed {type: 'tool_use', toolUseId: undefined, ...} for unrelated shapes like {type: 'image'}.
     } else if (block.type === 'tool_use') {
       content.push({
         type: 'tool_use',
@@ -408,6 +446,8 @@ function parseCallResponse(
         input: block.input,
       });
     }
+    // Other block types are silently dropped (see test:
+    // "ignores unknown inbound content block types").
   }
 
   const message: NormalizedMessage = {
@@ -560,7 +600,9 @@ function composeSignal(
     return anyFn([primary, secondary]);
   }
   const ctrl = new AbortController();
-  const onAbort = (): void => ctrl.abort();
+  const onAbort = (): void => {
+    ctrl.abort();
+  };
   primary.addEventListener('abort', onAbort, { once: true });
   secondary.addEventListener('abort', onAbort, { once: true });
   if (primary.aborted || secondary.aborted) ctrl.abort();

@@ -20,7 +20,6 @@
 
 import { describe, expect, it } from 'vitest';
 
-import type { LLMCallError } from '../../src/errors/taxonomy.js';
 import {
   classifyOutcomeForBreaker,
   gaugeValueForState,
@@ -28,6 +27,8 @@ import {
   type OriginKind,
   type ProviderCallContext,
 } from '../../src/routing/index.js';
+
+import type { LLMCallError } from '../../src/errors/taxonomy.js';
 
 // ─── gaugeValueForState ───────────────────────────────────────────────
 
@@ -128,7 +129,7 @@ describe('ProviderCallContext — structural shape (iter 6 commit 2)', () => {
     // must be amended first. This spec is the canary: the array below
     // enumerates every admissible token, and the line compiles only
     // while the union has exactly these two members.
-    const admissible: ReadonlyArray<ProviderCallContext['fundingMode']> = [
+    const admissible: readonly ProviderCallContext['fundingMode'][] = [
       'byok',
       'managed',
     ] as const;
@@ -146,7 +147,7 @@ describe('OriginKind — structural shape (iter 7 commit 1, aligned to §3.3)', 
     // iter 7 commit 1 realigns this from the narrowed 3-member version
     // introduced by iter 6 commit 2 back to the 5 members held by the
     // signed contract since LLM_CLIENT v1.0.
-    const allOrigins: ReadonlyArray<OriginKind> = [
+    const allOrigins: readonly OriginKind[] = [
       'assistant-conversation',
       'script-generation',
       'caption-refine',

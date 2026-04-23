@@ -1,10 +1,10 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   DecryptCommand,
   EncryptCommand,
   KMSClient,
 } from '@aws-sdk/client-kms';
 import { mockClient } from 'aws-sdk-client-mock';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   KMS_MAX_ATTEMPTS,
@@ -86,6 +86,7 @@ describe('kmsEncrypt', () => {
     vi.spyOn(deps.kms, 'send').mockImplementation(
       async (...args: Parameters<typeof realSend>) => {
         clock.t += 12;
+        // eslint-disable-next-line @typescript-eslint/no-confusing-void-expression -- the spy wrapper MUST forward the mock SDK's response; removing `return` makes `out` undefined and the kmsEncrypt `res.ok` assertion fails.
         return realSend(...args);
       },
     );
@@ -224,6 +225,7 @@ describe('kmsEncrypt', () => {
     vi.spyOn(deps.kms, 'send').mockImplementation(
       async (...args: Parameters<typeof realSend>) => {
         clock.t += 40;
+        // eslint-disable-next-line @typescript-eslint/no-confusing-void-expression -- see rationale in the spy at line ~86: the return is load-bearing for the mock SDK round-trip.
         return realSend(...args);
       },
     );
@@ -264,6 +266,7 @@ describe('kmsEncrypt', () => {
     vi.spyOn(deps.kms, 'send').mockImplementation(
       async (...args: Parameters<typeof realSend>) => {
         clock.t += 40;
+        // eslint-disable-next-line @typescript-eslint/no-confusing-void-expression -- see rationale in the spy at line ~86: the return is load-bearing for the mock SDK round-trip.
         return realSend(...args);
       },
     );
@@ -302,6 +305,7 @@ describe('kmsEncrypt', () => {
     vi.spyOn(deps.kms, 'send').mockImplementation(
       async (...args: Parameters<typeof realSend>) => {
         clock.t += 10;
+        // eslint-disable-next-line @typescript-eslint/no-confusing-void-expression -- see rationale in the spy at line ~86: the return is load-bearing for the mock SDK round-trip.
         return realSend(...args);
       },
     );

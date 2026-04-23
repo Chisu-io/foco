@@ -39,9 +39,12 @@
  * `src/` would risk them getting shipped to prod.
  */
 
-import type { EnvelopeCrypto } from '../../src/crypto/envelope.js';
-import { err, ok, type Result } from '../../src/types.js';
 import { type LLMCallError } from '../../src/errors/taxonomy.js';
+import { err, ok, type Result } from '../../src/types.js';
+
+import type { UsageBuffer } from '../../src/accounting/usage-counter.js';
+import type { LLMCallInput } from '../../src/client.js';
+import type { EnvelopeCrypto } from '../../src/crypto/envelope.js';
 import type { IdempotencyStore } from '../../src/idempotency/store.js';
 import type {
   PlanRouter,
@@ -51,11 +54,8 @@ import type {
 } from '../../src/routing/plan-router.js';
 import type { FlushScheduler } from '../../src/scheduler/flush-scheduler.js';
 import type { FlushTrigger } from '../../src/scheduler/flush-scheduler.js';
-import type { UsageBuffer } from '../../src/accounting/usage-counter.js';
-import type { LLMCallOutput } from '../../src/types/response.js';
 import type { NormalizedLLMRequest } from '../../src/types/request.js';
-
-import type { LLMCallInput } from '../../src/client.js';
+import type { LLMCallOutput } from '../../src/types/response.js';
 
 // Re-export FakeLogger from the scheduler suite so client specs need
 // only `from './_fakes.js'`. The shape is identical and pinning it in
@@ -112,10 +112,10 @@ export class FakePlanRouter implements PlanRouter {
   readonly callLog: RouteInput[] = [];
 
   /** Queue of outcomes; shifts on every call. */
-  private readonly queue: Array<{
+  private readonly queue: {
     readonly result: Result<RouterCallOutput, LLMCallError>;
     readonly delayMs: number;
-  }> = [];
+  }[] = [];
 
   /** Used when the queue is empty. Tests override for fallthrough specs. */
   fallbackResult: Result<RouterCallOutput, LLMCallError> = err({
@@ -158,10 +158,7 @@ export class FakePlanRouter implements PlanRouter {
     };
     if (next.delayMs > 0) {
       await new Promise<void>((resolve) => {
-        const handle = setTimeout(resolve, next.delayMs);
-        if (typeof handle === 'object' && handle !== null && 'unref' in handle) {
-          (handle as { unref: () => void }).unref();
-        }
+        setTimeout(resolve, next.delayMs).unref();
       });
     }
     return next.result;
@@ -218,7 +215,7 @@ export function asEnvelopeCrypto(f: FakeEnvelopeCrypto): EnvelopeCrypto {
  */
 export class FakeUsageBuffer {
   private _size = 0;
-  constructor(public readonly capacity: number = 1000) {}
+  constructor(public readonly capacity = 1000) {}
 
   size(): number {
     return this._size;
@@ -421,6 +418,9 @@ export function makeCallInput(
     traceparent: overrides.traceparent ?? DEFAULT_TRACEPARENT,
     ...(overrides.providerHint !== undefined
       ? { providerHint: overrides.providerHint }
+      : {}),
+    ...(overrides.correlationId !== undefined
+      ? { correlationId: overrides.correlationId }
       : {}),
     ...(overrides.idempotencyKey !== undefined
       ? { idempotencyKey: overrides.idempotencyKey }

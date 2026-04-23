@@ -39,11 +39,11 @@ import {
  * Returns the outermost error; the deepest one carries the `code`.
  */
 function causeChain(codeAtDepth: number, code: string): Error {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+   
   let inner: any = new Error(`root-${code}`);
   (inner as { code: string }).code = code;
   for (let i = 0; i < codeAtDepth; i++) {
-    const outer = new Error(`layer-${i}`);
+    const outer = new Error(`layer-${String(i)}`);
     (outer as { cause: unknown }).cause = inner;
     inner = outer;
   }
@@ -73,7 +73,10 @@ function fakeOkResponse(opts: {
       },
     },
     text: async (): Promise<string> => {
-      if (opts.textThrows !== undefined) throw opts.textThrows;
+      if (opts.textThrows !== undefined) {
+        // eslint-disable-next-line @typescript-eslint/only-throw-error -- test helper mirrors the real fetch API which can reject with arbitrary values
+        throw opts.textThrows;
+      }
       return opts.body ?? '';
     },
   };
@@ -320,7 +323,7 @@ describe('readErrorCode — cause-chain walker', () => {
     // Outer has no .cause at all → walker halts on hop 1, code not
     // found, kind='other'.
     const outer = new Error('fetch failed');
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+     
     const weirdCause: any = { notAStandardError: true };
     (outer as { cause: unknown }).cause = weirdCause;
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(outer));

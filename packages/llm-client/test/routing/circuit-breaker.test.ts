@@ -8,7 +8,6 @@ import {
   createStaticFlagsReader,
 } from '../../src/config/index.js';
 import { InMemoryMetrics } from '../../src/observability/metrics.js';
-import type { ProviderName } from '../../src/providers/provider.js';
 import {
   CB_METRIC_NAMES,
   classifyOutcomeForBreaker,
@@ -16,6 +15,8 @@ import {
   gaugeValueForState,
   type CircuitStateChangeEvent,
 } from '../../src/routing/index.js';
+
+import type { ProviderName } from '../../src/providers/provider.js';
 
 // ─── Test harness ─────────────────────────────────────────────────────
 

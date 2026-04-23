@@ -28,9 +28,9 @@
  */
 
 import type { LLMCallError } from '../errors/taxonomy.js';
-import type { Result } from '../types.js';
 import type { NormalizedLLMRequest } from '../types/request.js';
 import type { PingOutput, ProviderCallOutput } from '../types/response.js';
+import type { Result } from '../types.js';
 
 /**
  * Canonical provider identifier. Widen together with

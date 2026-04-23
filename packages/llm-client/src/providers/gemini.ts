@@ -52,7 +52,19 @@ import {
   classifyProviderHttpError,
 } from '../errors/classify.js';
 import { make, type LLMCallError } from '../errors/taxonomy.js';
+import {
+  fetchHttpClient,
+  HttpTransportError,
+  transportKindToNetworkKind,
+  type HttpClient,
+} from '../http/client.js';
 import { err, ok, type Result } from '../types.js';
+
+import type {
+  Provider,
+  ProviderCallInput,
+  ProviderPingInput,
+} from './provider.js';
 import type {
   NormalizedContentBlock,
   NormalizedLLMRequest,
@@ -64,17 +76,6 @@ import type {
   StopReason,
   UsageCounts,
 } from '../types/response.js';
-import {
-  fetchHttpClient,
-  HttpTransportError,
-  transportKindToNetworkKind,
-  type HttpClient,
-} from '../http/client.js';
-import type {
-  Provider,
-  ProviderCallInput,
-  ProviderPingInput,
-} from './provider.js';
 
 /** Base URL; `{model}:generateContent` is appended per request. */
 export const GEMINI_ENDPOINT_BASE =
@@ -267,11 +268,11 @@ interface GeminiRequestBody {
   generationConfig: GeminiGenerationConfig;
   tools?: readonly [
     {
-      functionDeclarations: ReadonlyArray<{
+      functionDeclarations: readonly {
         name: string;
         description: string;
         parameters: Readonly<Record<string, unknown>>;
-      }>;
+      }[];
     },
   ];
 }
@@ -391,6 +392,14 @@ function toGeminiPart(
 
 // ─── Inbound response parsing ────────────────────────────────────────
 
+/**
+ * Known Gemini finish-reason literals plus a string-branded catch-all.
+ * Using `(string & {})` instead of `string` keeps the literal
+ * autocompletions while still admitting forward-compatible values
+ * AI Studio may add; the plain `string` form triggered
+ * `@typescript-eslint/no-redundant-type-constituents` because it
+ * subsumed the literals.
+ */
 type GeminiFinishReason =
   | 'STOP'
   | 'MAX_TOKENS'
@@ -398,7 +407,7 @@ type GeminiFinishReason =
   | 'RECITATION'
   | 'OTHER'
   | 'FINISH_REASON_UNSPECIFIED'
-  | string;
+  | (string & {});
 
 type GeminiPartIn =
   | { text?: string }
@@ -410,14 +419,14 @@ type GeminiPartIn =
     };
 
 interface GeminiResponseBody {
-  candidates?: ReadonlyArray<{
+  candidates?: readonly {
     content?: {
       role?: string;
-      parts?: ReadonlyArray<GeminiPartIn>;
+      parts?: readonly GeminiPartIn[];
     };
     finishReason?: GeminiFinishReason;
     index?: number;
-  }>;
+  }[];
   usageMetadata?: {
     promptTokenCount?: number;
     candidatesTokenCount?: number;
@@ -474,14 +483,18 @@ function parseCallResponse(
       content.push({ type: 'text', text: p.text });
     } else if (
       'functionCall' in p &&
-      p.functionCall !== undefined &&
       typeof p.functionCall.name === 'string'
     ) {
+      // `exactOptionalPropertyTypes` already guarantees `p.functionCall`
+      // is the populated shape when `'functionCall' in p` holds —
+      // an explicit `!== undefined` was flagged `no-overlap` because
+      // the optional key is either absent or fully present, never
+      // set-to-undefined.
       content.push({
         type: 'tool_use',
         // Gemini has no per-call id; synthesise one from the function
         // name plus an ordinal so results can be correlated back.
-        toolUseId: `${p.functionCall.name}-${content.length}`,
+        toolUseId: `${p.functionCall.name}-${String(content.length)}`,
         toolName: p.functionCall.name,
         input: p.functionCall.args ?? {},
       });
@@ -551,6 +564,14 @@ function toNormalizedStopReason(
   switch (r) {
     case 'MAX_TOKENS':
       return 'max_tokens';
+    case 'SAFETY':
+    case 'RECITATION':
+      // Safety and recitation are content-policy stops. Upstream the
+      // `contentBlocked` path is usually taken before we get here
+      // (see `promptFeedback.blockReason` handling); falling through
+      // to `end_turn` is the safe default when we didn't classify
+      // the response as blocked but the reason landed here anyway.
+      return 'end_turn';
     case 'STOP':
     case 'OTHER':
     case 'FINISH_REASON_UNSPECIFIED':
@@ -706,7 +727,7 @@ function composeSignal(
     return anyFn([primary, secondary]);
   }
   const ctrl = new AbortController();
-  const onAbort = (): void => ctrl.abort();
+  const onAbort = (): void => { ctrl.abort(); };
   primary.addEventListener('abort', onAbort, { once: true });
   secondary.addEventListener('abort', onAbort, { once: true });
   if (primary.aborted || secondary.aborted) ctrl.abort();

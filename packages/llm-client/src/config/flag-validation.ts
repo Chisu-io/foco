@@ -58,7 +58,7 @@ export class FlagValidationError extends Error {
 
   constructor(issues: readonly FlagValidationIssue[]) {
     super(
-      `Invalid llm-client flag values (${issues.length} issue${
+      `Invalid llm-client flag values (${String(issues.length)} issue${
         issues.length === 1 ? '' : 's'
       }). ` + issues.map((i) => `[${i.flag}:${i.code}]`).join(' '),
     );
@@ -97,7 +97,7 @@ export function validateFlags(input: unknown): ValidationResult {
 
   // Start from an empty record with the right shape; we fill it as
   // each flag validates successfully.
-  const partial: { [K in LLMFlagName]?: number } = {};
+  const partial: Partial<Record<LLMFlagName, number>> = {};
   const record =
     input !== null && typeof input === 'object'
       ? (input as Record<string, unknown>)
@@ -122,7 +122,8 @@ export function validateFlags(input: unknown): ValidationResult {
         flag: name,
         code: 'out_of_range',
         message:
-          `Flag ${name}=${raw} is out of range [${spec.min}, ${spec.max}]` +
+          `Flag ${name}=${String(raw)} is out of range ` +
+          `[${String(spec.min)}, ${String(spec.max)}]` +
           (spec.hardCap ? ' (hard-cap of §16 — not changeable by flag)' : ''),
         received: raw,
         expected: { min: spec.min, max: spec.max },
@@ -142,8 +143,8 @@ export function validateFlags(input: unknown): ValidationResult {
       flag: 'cross_invariant',
       code: 'jitter_order',
       message:
-        `llm.kms.retry_jitter_ms_min (${jMin}) must be strictly less ` +
-        `than llm.kms.retry_jitter_ms_max (${jMax}).`,
+        `llm.kms.retry_jitter_ms_min (${String(jMin)}) must be strictly less ` +
+        `than llm.kms.retry_jitter_ms_max (${String(jMax)}).`,
       received: { min: jMin, max: jMax },
       expected: { rule: 'retry_jitter_ms_min < retry_jitter_ms_max' },
     });
@@ -160,8 +161,8 @@ export function validateFlags(input: unknown): ValidationResult {
       flag: 'cross_invariant',
       code: 'cooldown_over_window',
       message:
-        `llm.circuit_breaker.open_cooldown_seconds (${cooldown}) must be ` +
-        `≤ llm.circuit_breaker.window_seconds × 5 (${window * 5}).`,
+        `llm.circuit_breaker.open_cooldown_seconds (${String(cooldown)}) must be ` +
+        `≤ llm.circuit_breaker.window_seconds × 5 (${String(window * 5)}).`,
       received: { cooldown, window },
       expected: {
         rule: 'open_cooldown_seconds ≤ window_seconds × 5',
@@ -219,7 +220,7 @@ export interface LoadFlagsInput {
    *
    * Set to `null` when GrowthBook is unreachable.
    */
-  readonly growthbookValues: unknown | null;
+  readonly growthbookValues: unknown;
   /**
    * Process env map. Defaults to `process.env`. Tests inject a
    * plain object for hermeticity.

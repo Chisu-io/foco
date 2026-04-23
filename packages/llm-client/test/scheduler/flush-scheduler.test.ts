@@ -44,6 +44,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { FakeLogger, FakeUsageRecorder } from './_fakes.js';
 import { UsageBuffer } from '../../src/accounting/usage-counter.js';
 import { InMemoryMetrics } from '../../src/observability/metrics.js';
 import {
@@ -53,7 +54,6 @@ import {
   FlushScheduler,
   type FlushSchedulerDeps,
 } from '../../src/scheduler/flush-scheduler.js';
-import { FakeLogger, FakeUsageRecorder } from './_fakes.js';
 
 /**
  * Factory that produces a scheduler + all fakes with sensible defaults.
@@ -74,7 +74,7 @@ function makeScheduler(
     for (let i = 0; i < overrides.seedBuffer; i += 1) {
       // Cast: recorder fake never reads the entry — a typed placeholder
       // is not worth the import surface.
-      buffer.push({ userId: `u-${i}` } as never);
+      buffer.push({ userId: `u-${String(i)}` } as never);
     }
   }
   const recorder = new FakeUsageRecorder();
@@ -307,7 +307,7 @@ describe('FlushScheduler — threshold trigger', () => {
     scheduler.notifyBufferChanged(0); // re-arms
     buffer.push({ userId: 'u' } as never);
     // Fill back up to threshold the "natural" way — just re-notify.
-    for (let i = 0; i < 7; i += 1) buffer.push({ userId: `u-${i}` } as never);
+    for (let i = 0; i < 7; i += 1) buffer.push({ userId: `u-${String(i)}` } as never);
     scheduler.notifyBufferChanged(buffer.size()); // fires (2)
     await vi.advanceTimersByTimeAsync(0);
 
@@ -337,7 +337,7 @@ describe('FlushScheduler — threshold trigger', () => {
 
     // Refill above threshold — threshold should fire again because
     // runFlush saw size < thresholdSize after the drain and re-armed.
-    for (let i = 0; i < 8; i += 1) buffer.push({ userId: `u-${i}` } as never);
+    for (let i = 0; i < 8; i += 1) buffer.push({ userId: `u-${String(i)}` } as never);
     scheduler.notifyBufferChanged(buffer.size()); // fires (2)
     await vi.advanceTimersByTimeAsync(0);
     expect(recorder.flushCalls).toBe(2);

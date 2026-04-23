@@ -98,8 +98,11 @@ export interface Metrics {
  * which runs outside the worker process).
  */
 export const NOOP_METRICS: Metrics = Object.freeze({
+  // eslint-disable-next-line @typescript-eslint/no-empty-function -- NOOP by design
   counter(): void {},
+  // eslint-disable-next-line @typescript-eslint/no-empty-function -- NOOP by design
   histogram(): void {},
+  // eslint-disable-next-line @typescript-eslint/no-empty-function -- NOOP by design
   gauge(): void {},
 });
 
@@ -140,7 +143,7 @@ export class InMemoryMetrics implements Metrics {
   readonly histograms = new Map<string, HistogramSample[]>();
   readonly gauges = new Map<string, number>();
 
-  counter(name: string, labels?: MetricLabels, value: number = 1): void {
+  counter(name: string, labels?: MetricLabels, value = 1): void {
     const key = `${name}|${serialiseLabels(labels)}`;
     this.counters.set(key, (this.counters.get(key) ?? 0) + value);
   }

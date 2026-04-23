@@ -19,15 +19,16 @@
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { fakeHttp, jsonResponse, neverTimeout, throwTransport } from './_fake-http.js';
 import {
   OPENAI_ENDPOINT,
   OPENAI_PING_MODEL,
   createOpenAIProvider,
 } from '../../src/providers/openai.js';
+
 import type { HttpClient } from '../../src/http/client.js';
 import type { NormalizedLLMRequest } from '../../src/types/request.js';
 
-import { fakeHttp, jsonResponse, neverTimeout, throwTransport } from './_fake-http.js';
 
 const KEY = 'sk-openai-test-SECRET';
 // Iter 6 commit 2 (P11): every `provider.call` now requires a
@@ -74,7 +75,7 @@ describe('openai.call — outbound wire format', () => {
     const sent = http.received[0]!;
     expect(sent.method).toBe('POST');
     expect(sent.url).toBe(OPENAI_ENDPOINT);
-    expect(sent.headers['authorization']).toBe(`Bearer ${KEY}`);
+    expect(sent.headers.authorization).toBe(`Bearer ${KEY}`);
     expect(sent.headers['content-type']).toBe('application/json');
   });
 

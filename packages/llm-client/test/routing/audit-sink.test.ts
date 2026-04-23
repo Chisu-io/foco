@@ -386,7 +386,10 @@ describe('createCircuitAuditSink — happy path', () => {
     // `OnCircuitStateChange` is typed `(event) => void`. The
     // implementation must honour it — returning a Promise would
     // tempt callers to `await` and break the non-blocking guarantee.
-    const result = sink(evOpened()) as unknown;
+    // Re-type via a local alias so the expression isn't a bare `void`
+    // (otherwise `no-confusing-void-expression` complains).
+    const probe: (e: CircuitStateChangeEvent) => unknown = sink;
+    const result = probe(evOpened());
     expect(result).toBeUndefined();
   });
 });
@@ -529,7 +532,7 @@ describe('createCircuitAuditSink — writer failures', () => {
 
       // Assert the callback is synchronous and non-throwing even
       // with a failure queued.
-      expect(() => sink(evOpened())).not.toThrow();
+      expect(() => { sink(evOpened()); }).not.toThrow();
       await flushMicrotasks();
 
       expect(
@@ -553,7 +556,7 @@ describe('createCircuitAuditSink — writer failures', () => {
     deps.writer.rejectWith(new Error('db offline'));
     const sink = createCircuitAuditSink(deps);
 
-    expect(() => sink(evClosed())).not.toThrow();
+    expect(() => { sink(evClosed()); }).not.toThrow();
     await flushMicrotasks();
 
     expect(
@@ -580,7 +583,7 @@ describe('createCircuitAuditSink — writer failures', () => {
     };
     const sink = createCircuitAuditSink(deps);
 
-    expect(() => sink(evOpened())).not.toThrow();
+    expect(() => { sink(evOpened()); }).not.toThrow();
     await flushMicrotasks();
 
     const metrics = deps.metrics as InMemoryMetrics;
@@ -624,7 +627,7 @@ describe('createCircuitAuditSink — writer failures', () => {
     deps.writer.enqueue(err({ kind: 'transport', message: 'x' }));
     const sink = createCircuitAuditSink(deps);
 
-    expect(() => sink(evOpened())).not.toThrow();
+    expect(() => { sink(evOpened()); }).not.toThrow();
     await flushMicrotasks();
     // Counter still incremented — logger failure is swallowed.
     expect(
@@ -658,13 +661,13 @@ describe('createCircuitAuditSink — writer failures', () => {
     // does is call `metrics.counter(ignoredTransitions, ...)`,
     // which throws. The outer try/catch must swallow.
     expect(() =>
-      sink({
+      { sink({
         provider: 'anthropic',
         from: 'open',
         to: 'half-open',
         at: FIXED_NOW,
         reason: 'cooldown_elapsed',
-      }),
+      }); },
     ).not.toThrow();
     // The safe-bump path also catches internally → logger invoked
     // with the unexpected-error message.
@@ -813,7 +816,7 @@ describe('createCircuitAuditSink — deps shape', () => {
     );
     const sink = createCircuitAuditSink(deps);
 
-    expect(() => sink(evOpened())).not.toThrow();
+    expect(() => { sink(evOpened()); }).not.toThrow();
     await flushMicrotasks();
 
     const metrics = deps.metrics as InMemoryMetrics;

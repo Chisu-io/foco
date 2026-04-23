@@ -35,7 +35,6 @@
  *  - `providerForModel` + `routingMismatchUserMessage` helpers.
  */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   context,
   ROOT_CONTEXT,
@@ -49,7 +48,9 @@ import {
   InMemorySpanExporter,
   SimpleSpanProcessor,
 } from '@opentelemetry/sdk-trace-base';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { hashNormalizedRequest } from '../../src/accounting/index.js';
 import {
   type FlagsReader,
   FLAG_DEFAULTS,
@@ -62,12 +63,6 @@ import {
   resetTracer,
   setTracer,
 } from '../../src/observability/tracing.js';
-import type {
-  Provider,
-  ProviderCallInput,
-  ProviderName,
-  ProviderPingInput,
-} from '../../src/providers/provider.js';
 import {
   type CircuitBreaker,
   type ApiKeyRequest,
@@ -84,12 +79,18 @@ import {
   routingMismatchUserMessage,
 } from '../../src/routing/index.js';
 import { err, ok, type Result } from '../../src/types.js';
-import { hashNormalizedRequest } from '../../src/accounting/index.js';
+
 import type {
   ConsentResolver,
   UsageEntry,
   UsageRecorder,
 } from '../../src/accounting/index.js';
+import type {
+  Provider,
+  ProviderCallInput,
+  ProviderName,
+  ProviderPingInput,
+} from '../../src/providers/provider.js';
 import type { ConsentMode } from '../../src/types/repos.js';
 import type {
   ModelId,
@@ -119,9 +120,9 @@ function flags(): FlagsReader {
  */
 class FakeProvider implements Provider {
   readonly name: ProviderName;
-  private readonly outcomes: Array<Result<ProviderCallOutput, LLMCallError>> =
+  private readonly outcomes: Result<ProviderCallOutput, LLMCallError>[] =
     [];
-  readonly callLog: Array<{
+  readonly callLog: {
     apiKey: string;
     abortSignal: AbortSignal | undefined;
     /**
@@ -131,7 +132,7 @@ class FakeProvider implements Provider {
      * caller's id verbatim (no minting, no rewriting).
      */
     correlationId: string;
-  }> = [];
+  }[] = [];
 
   constructor(name: ProviderName) {
     this.name = name;
@@ -198,8 +199,8 @@ function emptyRegistry(): ProviderRegistry {
  * response; tests enqueue specific outcomes per `mode`.
  */
 class FakeResolver implements ApiKeyResolver {
-  private readonly byokQueue: Array<Result<ResolvedKey, LLMCallError>> = [];
-  private readonly managedQueue: Array<Result<ResolvedKey, LLMCallError>> =
+  private readonly byokQueue: Result<ResolvedKey, LLMCallError>[] = [];
+  private readonly managedQueue: Result<ResolvedKey, LLMCallError>[] =
     [];
   readonly log: ApiKeyRequest[] = [];
 
@@ -258,6 +259,7 @@ class FakeResolver implements ApiKeyResolver {
 function closedBreaker(): CircuitBreaker {
   return {
     isCallAllowed: () => 'allow',
+    // eslint-disable-next-line @typescript-eslint/no-empty-function -- breaker.record is a no-op in always-closed fakes
     record: () => {},
     currentState: () => 'closed',
   };
@@ -267,6 +269,7 @@ function closedBreaker(): CircuitBreaker {
 function openBreaker(): CircuitBreaker {
   return {
     isCallAllowed: () => 'deny_open',
+    // eslint-disable-next-line @typescript-eslint/no-empty-function -- breaker.record is a no-op in always-open fakes
     record: () => {},
     currentState: () => 'open',
   };
@@ -1175,7 +1178,7 @@ describe('PlanRouter — circuit-breaker integration', () => {
 
     // Three managed failures in a row — should trip the breaker.
     for (let i = 0; i < 3; i++) {
-      resolver.enqueueManagedSuccess(`sk-${i}`, 'anthropic');
+      resolver.enqueueManagedSuccess(`sk-${String(i)}`, 'anthropic');
       provider.enqueueError(make.providerDown('anthropic', false));
     }
     const user = { userId: 'u', plan: 'influencer' as const };
@@ -1267,6 +1270,7 @@ describe('PlanRouter — correlationId propagation', () => {
       resolver,
       closedBreaker(),
       metrics,
+      // eslint-disable-next-line @typescript-eslint/no-empty-function -- onStateChange is a no-op for this test
       () => {},
     );
 
@@ -1882,7 +1886,7 @@ describe('PlanRouter — OTel spans (iter 6 commit 3, §10.1)', () => {
       ): ReturnType<F> {
         this._stack.push(ctx);
         try {
-          return fn.call(thisArg as ThisParameterType<F>, ...args);
+          return fn.call(thisArg!, ...args);
         } finally {
           this._stack.pop();
         }
@@ -1996,7 +2000,7 @@ describe('PlanRouter — OTel spans (iter 6 commit 3, §10.1)', () => {
     let endCallCount = 0;
     callerSpan.end = ((...args: Parameters<typeof originalEnd>) => {
       endCallCount += 1;
-      return originalEnd(...args);
+      originalEnd(...args);
     }) as typeof callerSpan.end;
 
     resolver.enqueueByokSuccess('sk-fwd-2', 'anthropic');

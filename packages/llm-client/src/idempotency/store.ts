@@ -58,8 +58,9 @@
  * @see .cmsgs/iter8-prompt.md — signed scope
  */
 
-import type { LLMCallOutput } from '../types/response.js';
 import { defaultClock, type Clock } from '../time.js';
+
+import type { LLMCallOutput } from '../types/response.js';
 
 /**
  * Maximum number of entries the in-memory LRU will retain. Signed in
@@ -201,6 +202,7 @@ export class InMemoryIdempotencyStore implements IdempotencyStore {
     return this.entries.size;
   }
 
+  // eslint-disable-next-line @typescript-eslint/require-await -- `IdempotencyStore.get` is contractually `Promise<T>`; the in-memory adapter has no IO to await but must match the interface other adapters (Redis, SQL) fulfil with real async work.
   async get(key: string): Promise<LLMCallOutput | undefined> {
     const entry = this.entries.get(key);
     if (entry === undefined) return undefined;
@@ -216,6 +218,7 @@ export class InMemoryIdempotencyStore implements IdempotencyStore {
     return entry.value;
   }
 
+  // eslint-disable-next-line @typescript-eslint/require-await -- `IdempotencyStore.set` is contractually `Promise<void>`; in-memory adapter has no IO to await but must match the interface.
   async set(
     key: string,
     value: LLMCallOutput,
@@ -239,6 +242,7 @@ export class InMemoryIdempotencyStore implements IdempotencyStore {
     this.entries.set(key, { value, expiresAt });
   }
 
+  // eslint-disable-next-line @typescript-eslint/require-await -- `IdempotencyStore.clear` is contractually `Promise<void>`; in-memory adapter has no IO to await but must match the interface.
   async clear(): Promise<void> {
     this.entries.clear();
   }

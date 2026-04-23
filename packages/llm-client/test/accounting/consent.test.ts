@@ -23,18 +23,18 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  ExplodingUserLLMKeyRepo,
+  FIXED_NOW,
+  InMemoryUserLLMKeyRepo,
+  ManualClock,
+} from './_fakes.js';
+import {
   CONSENT_RESOLVED_COUNTER,
   DEFAULT_CONSENT_CACHE_MAX_ENTRIES,
   DEFAULT_CONSENT_CACHE_TTL_MS,
   createConsentResolverFromRepo,
 } from '../../src/accounting/consent.js';
 import { InMemoryMetrics } from '../../src/observability/metrics.js';
-import {
-  ExplodingUserLLMKeyRepo,
-  FIXED_NOW,
-  InMemoryUserLLMKeyRepo,
-  ManualClock,
-} from './_fakes.js';
 
 describe('ConsentResolver — iter 7 commit 2', () => {
   it('reads from repo on first call and caches for subsequent calls within TTL', async () => {

@@ -75,17 +75,19 @@ import {
   type UsageEntry,
   type UsageRecorder,
 } from '../accounting/index.js';
-import type { FlagsReader } from '../config/flag-reader.js';
 import { make, type LLMCallError } from '../errors/taxonomy.js';
-import type { Metrics } from '../observability/metrics.js';
 import { getTracer, hashUserId } from '../observability/tracing.js';
-import type { Provider, ProviderName } from '../providers/provider.js';
 import { type Result, err, ok } from '../types.js';
-import type { ModelId, NormalizedLLMRequest } from '../types/request.js';
-import type { ConsentMode } from '../types/repos.js';
-import type { ProviderCallOutput } from '../types/response.js';
-import type { CircuitBreaker } from './circuit-breaker.js';
 import { classifyOutcomeForBreaker, type OriginKind } from './events.js';
+
+import type { CircuitBreaker } from './circuit-breaker.js';
+import type { FlagsReader } from '../config/flag-reader.js';
+import type { Metrics } from '../observability/metrics.js';
+import type { Provider, ProviderName } from '../providers/provider.js';
+import type { ConsentMode } from '../types/repos.js';
+import type { ModelId, NormalizedLLMRequest } from '../types/request.js';
+import type { ProviderCallOutput } from '../types/response.js';
+
 
 /**
  * Plan tiers in Foco. Kept as a local literal so this module does
@@ -390,7 +392,7 @@ function mismatchMessage(
 }
 
 function capitalize(s: string): string {
-  return s.length === 0 ? s : s[0]!.toUpperCase() + s.slice(1);
+  return s.length === 0 ? s : s.charAt(0).toUpperCase() + s.slice(1);
 }
 
 export function createPlanRouter(deps: PlanRouterDeps): PlanRouter {
@@ -879,7 +881,7 @@ export function createPlanRouter(deps: PlanRouterDeps): PlanRouter {
 
     const activeSpan = trace.getActiveSpan();
     const rootSpan: Span =
-      activeSpan !== undefined && activeSpan.isRecording()
+      activeSpan?.isRecording() === true
         ? activeSpan
         : tracer.startSpan('llm.client.call', {
             kind: SpanKind.CLIENT,

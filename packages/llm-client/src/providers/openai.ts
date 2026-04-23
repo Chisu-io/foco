@@ -37,7 +37,19 @@ import {
   classifyProviderHttpError,
 } from '../errors/classify.js';
 import { make, type LLMCallError } from '../errors/taxonomy.js';
+import {
+  fetchHttpClient,
+  HttpTransportError,
+  transportKindToNetworkKind,
+  type HttpClient,
+} from '../http/client.js';
 import { err, ok, type Result } from '../types.js';
+
+import type {
+  Provider,
+  ProviderCallInput,
+  ProviderPingInput,
+} from './provider.js';
 import type {
   NormalizedContentBlock,
   NormalizedLLMRequest,
@@ -49,17 +61,6 @@ import type {
   StopReason,
   UsageCounts,
 } from '../types/response.js';
-import {
-  fetchHttpClient,
-  HttpTransportError,
-  transportKindToNetworkKind,
-  type HttpClient,
-} from '../http/client.js';
-import type {
-  Provider,
-  ProviderCallInput,
-  ProviderPingInput,
-} from './provider.js';
 
 export const OPENAI_ENDPOINT =
   'https://api.openai.com/v1/chat/completions';
@@ -219,19 +220,19 @@ type OpenAIRole = 'system' | 'user' | 'assistant' | 'tool';
 
 interface OpenAIRequestBody {
   model: string;
-  messages: ReadonlyArray<OpenAIMessageOut>;
+  messages: readonly OpenAIMessageOut[];
   max_tokens: number;
   temperature?: number;
   stop?: readonly string[];
   response_format?: { type: 'json_object' };
-  tools?: ReadonlyArray<{
+  tools?: readonly {
     type: 'function';
     function: {
       name: string;
       description: string;
       parameters: Readonly<Record<string, unknown>>;
     };
-  }>;
+  }[];
 }
 
 type OpenAIMessageOut =
@@ -240,11 +241,11 @@ type OpenAIMessageOut =
   | {
       role: 'assistant';
       content: null;
-      tool_calls: ReadonlyArray<{
+      tool_calls: readonly {
         id: string;
         type: 'function';
         function: { name: string; arguments: string };
-      }>;
+      }[];
     };
 
 function buildRequestBody(
@@ -313,12 +314,12 @@ function toOpenAIMessage(
   }
 
   const textParts: string[] = [];
-  const toolCalls: Array<{
+  const toolCalls: {
     id: string;
     type: 'function';
     function: { name: string; arguments: string };
-  }> = [];
-  const toolResults: Array<OpenAIMessageOut> = [];
+  }[] = [];
+  const toolResults: OpenAIMessageOut[] = [];
 
   for (const b of m.content) {
     if (b.type === 'text') {
@@ -365,7 +366,11 @@ function toOpenAIMessage(
     out.push(...toolResults);
   }
 
-  return out.length === 1 ? out[0]! : out;
+  if (out.length === 1) {
+    const [only] = out;
+    if (only !== undefined) return only;
+  }
+  return out;
 }
 
 // ─── Inbound response parsing ────────────────────────────────────────
@@ -373,19 +378,19 @@ function toOpenAIMessage(
 interface OpenAIResponseBody {
   id?: string;
   model?: string;
-  choices?: ReadonlyArray<{
+  choices?: readonly {
     index?: number;
     finish_reason?: string;
     message?: {
       role?: 'assistant';
       content?: string | null;
-      tool_calls?: ReadonlyArray<{
+      tool_calls?: readonly {
         id?: string;
         type?: string;
         function?: { name?: string; arguments?: string };
-      }>;
+      }[];
     };
-  }>;
+  }[];
   usage?: {
     prompt_tokens?: number;
     completion_tokens?: number;
@@ -608,10 +613,12 @@ function parseDurationSec(s: string | undefined): number | undefined {
   const pattern = /(\d+)(ms|s|m|h)/g;
   let match: RegExpExecArray | null;
   while ((match = pattern.exec(s)) !== null) {
-    const n = Number.parseInt(match[1]!, 10);
+    const [, numStr, unit] = match;
+    if (numStr === undefined) continue;
+    const n = Number.parseInt(numStr, 10);
     if (!Number.isFinite(n)) continue;
     ok = true;
-    switch (match[2]) {
+    switch (unit) {
       case 'ms':
         total += n / 1000;
         break;
@@ -624,7 +631,7 @@ function parseDurationSec(s: string | undefined): number | undefined {
       case 'h':
         total += n * 3600;
         break;
-      default:
+      case undefined:
         break;
     }
   }
@@ -661,7 +668,7 @@ function composeSignal(
     return anyFn([primary, secondary]);
   }
   const ctrl = new AbortController();
-  const onAbort = (): void => ctrl.abort();
+  const onAbort = (): void => { ctrl.abort(); };
   primary.addEventListener('abort', onAbort, { once: true });
   secondary.addEventListener('abort', onAbort, { once: true });
   if (primary.aborted || secondary.aborted) ctrl.abort();

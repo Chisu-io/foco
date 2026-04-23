@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
 import fc from 'fast-check';
+import { describe, expect, it } from 'vitest';
 
 import {
   UnknownKekVersionError,
@@ -75,7 +75,7 @@ describe('shardId', () => {
     // checking that many userIds at v1 don't all collide on shard 0.
     const shards = new Set<number>();
     for (let i = 0; i < 200; i++) {
-      shards.add(shardId(`user-${i}`, 1));
+      shards.add(shardId(`user-${String(i)}`, 1));
     }
     expect(shards.size).toBeGreaterThan(1);
   });
@@ -117,7 +117,7 @@ describe('shardId', () => {
     // collisions within v1.
     const collisions = new Map<number, string[]>();
     for (let i = 0; i < 100; i++) {
-      const id = `user-${i}`;
+      const id = `user-${String(i)}`;
       const s = shardId(id, 1);
       const bucket = collisions.get(s) ?? [];
       bucket.push(id);

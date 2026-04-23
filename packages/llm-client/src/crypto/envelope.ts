@@ -29,7 +29,6 @@
  * losing the §5.1 signal.
  */
 
-import type { KMSClient } from '@aws-sdk/client-kms';
 import {
   SpanKind,
   SpanStatusCode,
@@ -37,11 +36,8 @@ import {
   trace,
 } from '@opentelemetry/api';
 
-import type { LLMCallError } from '../errors/taxonomy.js';
 import { make } from '../errors/taxonomy.js';
-import type { Metrics } from '../observability/metrics.js';
 import { getTracer } from '../observability/tracing.js';
-import type { ProviderName } from '../providers/provider.js';
 import { err, ok, type Result } from '../types.js';
 import {
   decryptWithDek,
@@ -60,6 +56,11 @@ import {
   type KmsDeps,
 } from './kek.js';
 import { shardId } from './sharding.js';
+
+import type { LLMCallError } from '../errors/taxonomy.js';
+import type { Metrics } from '../observability/metrics.js';
+import type { ProviderName } from '../providers/provider.js';
+import type { KMSClient } from '@aws-sdk/client-kms';
 
 /** The hard cap on DEK cache TTL, from §2 invariant 8 / §16. */
 export const MAX_DEK_CACHE_TTL_MS = 300_000;
@@ -158,13 +159,13 @@ export class EnvelopeCrypto {
     if (!Number.isFinite(deps.cacheTtlMs) || deps.cacheTtlMs < 0) {
       throw new Error(
         `EnvelopeCrypto: cacheTtlMs must be a non-negative finite number ` +
-          `(got ${deps.cacheTtlMs}).`,
+          `(got ${String(deps.cacheTtlMs)}).`,
       );
     }
     if (deps.cacheTtlMs > MAX_DEK_CACHE_TTL_MS) {
       throw new Error(
-        `EnvelopeCrypto: cacheTtlMs ${deps.cacheTtlMs}ms exceeds the ` +
-          `§2 invariant 8 / §16 hard-cap of ${MAX_DEK_CACHE_TTL_MS}ms. ` +
+        `EnvelopeCrypto: cacheTtlMs ${String(deps.cacheTtlMs)}ms exceeds the ` +
+          `§2 invariant 8 / §16 hard-cap of ${String(MAX_DEK_CACHE_TTL_MS)}ms. ` +
           'Raising this requires a bump of LLM_CLIENT.md, not a code change.',
       );
     }
@@ -439,5 +440,5 @@ export class EnvelopeCrypto {
  * alphanumeric identifier, so it is a safe separator.
  */
 function cacheKeyOf(userId: string, kekVersion: number): string {
-  return `${userId}\u0000${kekVersion}`;
+  return `${userId}\u0000${String(kekVersion)}`;
 }

@@ -22,9 +22,6 @@
  * the runtime serialises them.
  */
 
-import type { FlagsReader } from '../config/flag-reader.js';
-import type { Metrics } from '../observability/metrics.js';
-import type { ProviderName } from '../providers/provider.js';
 import {
   type CircuitDecision,
   type CircuitOutcome,
@@ -33,6 +30,10 @@ import {
   type OnCircuitStateChange,
   gaugeValueForState,
 } from './events.js';
+
+import type { FlagsReader } from '../config/flag-reader.js';
+import type { Metrics } from '../observability/metrics.js';
+import type { ProviderName } from '../providers/provider.js';
 
 /** One sample in the sliding window. */
 interface WindowSample {
@@ -146,8 +147,10 @@ export function createCircuitBreaker(
     const cutoff = nowMs - windowSec * 1_000;
     // Window is FIFO so we can shift from the front until the oldest
     // entry is within the cutoff. Loop upper-bounds at window length.
-    while (s.window.length > 0 && s.window[0]!.at < cutoff) {
+    let head = s.window[0];
+    while (head !== undefined && head.at < cutoff) {
       s.window.shift();
+      head = s.window[0];
     }
   }
 

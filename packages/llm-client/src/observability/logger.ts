@@ -71,5 +71,6 @@ export interface Logger {
  * {@link ./metrics.ts}.
  */
 export const NOOP_LOGGER: Logger = Object.freeze({
+  // eslint-disable-next-line @typescript-eslint/no-empty-function -- NOOP by design
   warn(): void {},
 });

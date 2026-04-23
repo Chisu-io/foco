@@ -24,15 +24,16 @@
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { fakeHttp, jsonResponse, neverTimeout, throwTransport } from './_fake-http.js';
 import {
   GEMINI_ENDPOINT_BASE,
   GEMINI_PING_MODEL,
   createGeminiProvider,
 } from '../../src/providers/gemini.js';
+
 import type { HttpClient } from '../../src/http/client.js';
 import type { NormalizedLLMRequest } from '../../src/types/request.js';
 
-import { fakeHttp, jsonResponse, neverTimeout, throwTransport } from './_fake-http.js';
 
 const KEY = 'AIzaSyTESTKEY';
 // Iter 6 commit 2 (P11): every `provider.call` now requires a

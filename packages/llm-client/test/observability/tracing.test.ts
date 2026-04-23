@@ -24,6 +24,12 @@
  *    deterministic, distinct inputs produce distinct outputs.
  */
 
+import { SpanKind, SpanStatusCode } from '@opentelemetry/api';
+import {
+  BasicTracerProvider,
+  InMemorySpanExporter,
+  SimpleSpanProcessor,
+} from '@opentelemetry/sdk-trace-base';
 import {
   afterEach,
   beforeEach,
@@ -31,12 +37,6 @@ import {
   expect,
   it,
 } from 'vitest';
-import { SpanKind, SpanStatusCode } from '@opentelemetry/api';
-import {
-  BasicTracerProvider,
-  InMemorySpanExporter,
-  SimpleSpanProcessor,
-} from '@opentelemetry/sdk-trace-base';
 
 import {
   getTracer,

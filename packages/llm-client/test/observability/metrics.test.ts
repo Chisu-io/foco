@@ -7,9 +7,9 @@ import {
 
 describe('NOOP_METRICS', () => {
   it('accepts every call silently', () => {
-    expect(() => NOOP_METRICS.counter('a')).not.toThrow();
-    expect(() => NOOP_METRICS.histogram('b', 10)).not.toThrow();
-    expect(() => NOOP_METRICS.gauge('c', 1)).not.toThrow();
+    expect(() => { NOOP_METRICS.counter('a'); }).not.toThrow();
+    expect(() => { NOOP_METRICS.histogram('b', 10); }).not.toThrow();
+    expect(() => { NOOP_METRICS.gauge('c', 1); }).not.toThrow();
   });
 
   it('is frozen', () => {

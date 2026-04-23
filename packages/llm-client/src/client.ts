@@ -88,8 +88,6 @@ import {
 import { z } from 'zod';
 
 import { hashNormalizedRequest } from './accounting/prompt-hash.js';
-import type { UsageBuffer } from './accounting/usage-counter.js';
-import type { EnvelopeCrypto } from './crypto/envelope.js';
 import { type LLMCallError, make } from './errors/taxonomy.js';
 import { buildIdempotencyKey } from './idempotency/key.js';
 import {
@@ -97,22 +95,25 @@ import {
   IDEMPOTENCY_MISSES_COUNTER,
   type IdempotencyStore,
 } from './idempotency/store.js';
-import type { Logger } from './observability/logger.js';
-import type { Metrics } from './observability/metrics.js';
 import {
   hashIdempotencyKey,
   hashUserId,
 } from './observability/tracing.js';
-import type { ProviderName } from './providers/provider.js';
-import type { OriginKind } from './routing/events.js';
 import {
   type PlanRouter,
   type RouteInput,
   type UserQuota,
 } from './routing/plan-router.js';
-import type { FlushScheduler } from './scheduler/flush-scheduler.js';
 import { type Clock } from './time.js';
 import { err, ok, type Result } from './types.js';
+
+import type { UsageBuffer } from './accounting/usage-counter.js';
+import type { EnvelopeCrypto } from './crypto/envelope.js';
+import type { Logger } from './observability/logger.js';
+import type { Metrics } from './observability/metrics.js';
+import type { ProviderName } from './providers/provider.js';
+import type { OriginKind } from './routing/events.js';
+import type { FlushScheduler } from './scheduler/flush-scheduler.js';
 import type { NormalizedLLMRequest } from './types/request.js';
 import type { LLMCallOutput } from './types/response.js';
 
@@ -241,6 +242,11 @@ const callInputSchema = z
     request: normalizedLLMRequestSchema,
     providerHint: z.enum(['anthropic', 'openai', 'gemini']).optional(),
     traceparent: z.string(),
+    // Iter 9 pendiente 18.3: declared explicitly (prior: accepted via
+    // `.passthrough()` only). Empty string is tolerated at parse time
+    // but the facade treats it as "absent" and falls back to
+    // `traceparent` parsing.
+    correlationId: z.string().optional(),
     idempotencyKey: z.string().optional(),
   })
   .passthrough();
@@ -259,10 +265,14 @@ const callInputSchema = z
  * Fields in §3.3 (verbatim): `exposureScope`, `origin`, `request`,
  * `providerHint?`, `traceparent`, `idempotencyKey?`.
  *
+ * Iter 9 additions (local, no contract bump):
+ *  - 18.3: `correlationId?` declared as typed optional field (caller
+ *    override preferred over `traceparent` parsing when non-empty).
+ *
  * The `idempotencyKey?` caller override is **ignored** in c3 — the
  * facade always computes {@link buildIdempotencyKey}`(userId,
  * promptHash, model)`. Iter 9 will honour the override (tracked in
- * LLM_CLIENT.md pendientes).
+ * LLM_CLIENT.md pendiente 18.2).
  */
 export interface LLMCallInput {
   /**
@@ -283,10 +293,26 @@ export interface LLMCallInput {
   readonly providerHint?: ProviderName | undefined;
   /**
    * §3.3 — W3C traceparent header (`version-traceId-spanId-flags`).
-   * The facade derives `correlationId` by parsing the 32-char `traceId`
-   * segment; falls back to a fresh `randomUUID()` on malformed input.
+   * Used as the default source for `correlationId` when the caller
+   * does not provide an explicit one: the facade parses the 32-char
+   * `traceId` segment via {@link deriveCorrelationId}; falls back to
+   * a fresh `randomUUID()` on malformed input.
    */
   readonly traceparent: string;
+  /**
+   * Optional caller-supplied correlation id. When provided and
+   * non-empty, the facade uses it verbatim instead of parsing
+   * `traceparent`; the router stamps it on spans + accounting rows
+   * + `make.internal(...)` outputs. Useful for callers that already
+   * hold a stable business correlation id (worker job id, external
+   * request id, replay trace) and want log correlation without
+   * synthesising a W3C traceparent. Empty strings fall back to
+   * `traceparent` parsing.
+   *
+   * Iter 9 pendiente 18.3 landed this as a typed field (prior
+   * behaviour: `.passthrough()` only, not declared on the type).
+   */
+  readonly correlationId?: string | undefined;
   /** §3.3 — IGNORED in c3. Iter 9 will honour the override. */
   readonly idempotencyKey?: string | undefined;
 }
@@ -546,7 +572,7 @@ export class LLMClient {
       // etc.) we short-circuit BEFORE invoking the router. The error
       // is `networkError(false)` per §7.1; the span status message is
       // `deadline_exceeded` for dashboard filters.
-      if (composed !== undefined && composed.aborted) {
+      if (composed?.aborted === true) {
         const latencyMs = this.deps.clock() - start;
         span.setAttribute('llm.latency_ms', latencyMs);
         span.setStatus({
@@ -559,7 +585,16 @@ export class LLMClient {
       // Step 9 — router invocation inside a `context.with(...)` scope
       // so `trace.getActiveSpan()` in the router's iter-8 forward-compat
       // branch resolves to our span (no new root gets opened).
-      const correlationId = deriveCorrelationId(input.traceparent);
+      //
+      // Resolution order for `correlationId` (iter 9 pendiente 18.3):
+      //   1. `input.correlationId` if provided and non-empty — caller
+      //      owns the value verbatim.
+      //   2. Parsed traceId portion of `input.traceparent`.
+      //   3. Fresh `randomUUID()` fallback (inside deriveCorrelationId).
+      const correlationId =
+        typeof input.correlationId === 'string' && input.correlationId.length > 0
+          ? input.correlationId
+          : deriveCorrelationId(input.traceparent);
       const routeInput = this.buildRouteInput(
         input,
         correlationId,
@@ -685,11 +720,15 @@ export class LLMClient {
    */
   private openSpan(input: LLMCallInput): Span {
     const attrs: Record<string, string> = {};
-    if (typeof input?.origin === 'string' && input.origin.length > 0) {
+    // The input shape is typed non-nullable, but we still guard the
+    // length of each string so empty-string callers don't produce
+    // useless span attrs. Earlier iter 8 had extra `?.` chains against
+    // a looser ad-hoc shape; LLM_CLIENT v1.1 froze the type.
+    if (input.origin.length > 0) {
       attrs['llm.origin'] = input.origin;
     }
-    const userId = input?.user?.userId;
-    if (typeof userId === 'string' && userId.length > 0) {
+    const userId = input.user.userId;
+    if (userId.length > 0) {
       attrs['user.id_hash'] = hashUserId(userId);
     }
     return this.deps.tracer.startSpan(CLIENT_SPAN_NAME, {
@@ -701,8 +740,10 @@ export class LLMClient {
   /**
    * Translate the facade's `LLMCallInput` into the router's
    * `RouteInput`. The two shapes are deliberately not identical —
-   * `exposureScope` / `traceparent` / `idempotencyKey` are facade
-   * concerns, and `correlationId` is derived from `traceparent` here.
+   * `exposureScope` / `traceparent` / `idempotencyKey` /
+   * `correlationId` are facade-level concerns; `correlationId` is
+   * resolved here (typed `input.correlationId` override preferred
+   * over `deriveCorrelationId(input.traceparent)` when non-empty).
    *
    * `exactOptionalPropertyTypes` makes `{ foo: undefined }`
    * structurally different from `{}`, so we only attach `providerHint`
@@ -821,7 +862,7 @@ export function deriveCorrelationId(traceparent: string): string {
  * resolves immediately `'drained'`).
  */
 async function raceDrain(
-  tasks: ReadonlyArray<Promise<void>>,
+  tasks: readonly Promise<void>[],
   drainTimeoutMs: number,
 ): Promise<'drained' | 'timeout'> {
   if (tasks.length === 0) return 'drained';
@@ -834,12 +875,13 @@ async function raceDrain(
     // (impossible in Node, but cheap to document).
     return 'timeout';
   }
-  const timeout: Promise<'timeout'> = new Promise((resolve) => {
-    const handle = setTimeout(() => resolve('timeout'), drainTimeoutMs);
-    // Don't keep the event loop alive just because of this timer.
-    if (typeof handle === 'object' && handle !== null && 'unref' in handle) {
-      (handle as { unref: () => void }).unref();
-    }
+  const timeout = new Promise<'timeout'>((resolve) => {
+    // NodeJS.Timeout — `.unref()` prevents the drain timer from
+    // keeping the event loop alive past resolution. `tsconfig` pulls
+    // in `@types/node` so the return type is always the rich handle.
+    setTimeout(() => {
+      resolve('timeout');
+    }, drainTimeoutMs).unref();
   });
   return Promise.race([drained, timeout]);
 }

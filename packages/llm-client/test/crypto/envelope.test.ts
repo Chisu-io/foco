@@ -1,24 +1,24 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   DecryptCommand,
   EncryptCommand,
   KMSClient,
 } from '@aws-sdk/client-kms';
-import { mockClient } from 'aws-sdk-client-mock';
 import { SpanKind, SpanStatusCode } from '@opentelemetry/api';
 import {
   BasicTracerProvider,
   InMemorySpanExporter,
   SimpleSpanProcessor,
 } from '@opentelemetry/sdk-trace-base';
+import { mockClient } from 'aws-sdk-client-mock';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { generateDek, zeroize } from '../../src/crypto/dek.js';
 import {
   EnvelopeCrypto,
   MAX_DEK_CACHE_TTL_MS,
   type Envelope,
   type EnvelopeDeps,
 } from '../../src/crypto/envelope.js';
-import { generateDek, zeroize } from '../../src/crypto/dek.js';
 import { kekAlias } from '../../src/crypto/kek.js';
 import { shardId } from '../../src/crypto/sharding.js';
 import { InMemoryMetrics } from '../../src/observability/metrics.js';
@@ -626,8 +626,8 @@ describe('EnvelopeCrypto.unwrap — OTel `llm.kms.decrypt_dek` span (iter 6 comm
     expect(span.attributes['llm.api_key']).toBeUndefined();
     expect(span.attributes['llm.key_ciphertext']).toBeUndefined();
     // No hay campo `alias` o `ciphertext` crudo.
-    expect(span.attributes['alias']).toBeUndefined();
-    expect(span.attributes['ciphertext']).toBeUndefined();
+    expect(span.attributes.alias).toBeUndefined();
+    expect(span.attributes.ciphertext).toBeUndefined();
     expect(span.attributes['user.id']).toBeUndefined();
     // Sanity: el provider pasado sí está estampado.
     expect(span.attributes['llm.provider']).toBe('gemini');
