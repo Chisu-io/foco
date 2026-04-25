@@ -1,13 +1,15 @@
 ---
-title: Foco · UX Frozen v1.3
-status: FROZEN v1.3 (§6 step 1 renombra `packages/render-schema/` → `packages/schemas/` para reflejar el alcance real del paquete — alberga los 6 contratos ancla, no solo render)
-date: 2026-04-18
+title: Foco · UX Frozen v1.4
+status: FROZEN v1.4 (§3.1 narrowed a subset social-first 6 conectores MVP — alineado con `MEMORY_INGEST.md v0.2` firmado 2026-04-23)
+date: 2026-04-23
 owner: Jean Pierre Rojas
 reviewer: Jean + AI peer review externo
 mockup: ./ui-mockup.html
 depends_on:
   - ./INGEST_SECURITY.md (spec de seguridad y cuotas — prerequisito técnico)
+  - ./MEMORY_INGEST.md (pipeline de ingesta + retrieval — firmado v0.2 2026-04-23)
 changelog:
+  - v1.4 (2026-04-23): §3.1 narrowed a subset social-first 6 conectores MVP (file, github, youtube, instagram, facebook, tiktok). Los 5 conectores diferidos (link, drive, MCP-cliente, LinkedIn, X) pasan a "Próximamente con voting". §3.2 MCP Gateway: el lado **cliente** queda diferido a post-MVP junto con `@chisu/memory-ingest` connectors; el lado **servidor** (Foco expone Memoria a otras AIs) sigue en MVP. §3.5 actualizado: "10 conectores restantes" → "5 conectores MVP". Aprobado por Jean 2026-04-23 en sesión de firma del `MEMORY_INGEST.md v0.2`.
   - v1.3 (2026-04-18): Rename `packages/render-schema/` → `packages/schemas/` en §6 step 1. Justificación: el paquete alberga los 6 contratos ancla (RenderRequest, MemoryItem, UserQuota, IngestAuditEntry, SystemAuditEntry, McpAuthorization), no solo render. Cambio no funcional — solo nombre de carpeta y campo `name` del package.json (`@chisu/schemas`). Aprobado por Jean 2026-04-18.
   - v1.2 (2026-04-17): Se añade §3.5 Seguridad de ingesta y §3.6 Cuotas por plan como invariantes del sistema. MemoryItem extendido con campos de seguridad (§5.2). Nuevos tipos UserQuota e IngestAuditEntry (§5.4). Prerequisito técnico anterior al render-schema (§6.0).
   - v1.1 (2026-04-17): MCP se separa a pantalla propia (§2 #14), "Help" se reclasifica en grupo Ajustes, se añade principio #6 de agrupación funcional.
@@ -55,29 +57,36 @@ Las pantallas se distribuyen en cuatro grupos funcionales: **Onboarding** (3), *
 
 ## 3 · Memoria — contrato funcional
 
-### 3.1 Fuentes MVP (11, cerradas)
+### 3.1 Fuentes MVP (subset social-first, 6 conectores firmados 2026-04-23)
 
-| # | Fuente | Mecanismo | Notas |
-|---|---|---|---|
-| 1 | Archivo | Drop zone upload | PDF, DOCX, MD, TXT, XLSX, CSV, MP3, WAV, MP4, MOV, PNG, JPG, SVG · máx 500 MB/file |
-| 2 | Link suelto | Paste URL → fetch + extract | Artículo, PDF web, página pública |
-| 3 | Google Drive | OAuth + sync continuo | Docs, Sheets, Slides, PDFs |
-| 4 | GitHub | OAuth + webhook | Repos, README, issues, commits |
-| 5 | **MCP gateway** | Bi-direccional (ver §3.2) | Claude Desktop, ChatGPT, Cursor, Gemini, Raycast, custom |
-| 6 | YouTube | OAuth + API | Videos propios, captions, canal |
-| 7 | TikTok | OAuth + API | Videos, métricas |
-| 8 | Facebook | OAuth + Graph API | Páginas, posts |
-| 9 | LinkedIn | OAuth | Posts, perfil |
-| 10 | Instagram | OAuth + Graph API | Reels, feed, bio |
-| 11 | X.com | OAuth | Threads, replies |
+El MVP de Memoria narrowea a 6 conectores que cubren el contenido natural del creator (audiovisual + código + archivos). Los 5 conectores que estaban en la lista original v1.0–v1.3 (link, Drive, MCP-cliente, LinkedIn, X) pasan a la sección "Próximamente". Detalles técnicos del pipeline en `MEMORY_INGEST.md v0.2 §9`.
+
+| # | Fuente | Mecanismo | Notas | Modo |
+|---|---|---|---|---|
+| 1 | Archivo | Drop zone upload | PDF, DOCX, MD, TXT, XLSX, CSV, MP3, WAV, MP4, MOV, PNG, JPG, SVG · máx 500 MB/file | sync |
+| 2 | GitHub | OAuth + manual refresh | Repos del usuario, README, código en lenguajes mainstream. Chunking respeta función/clase vía tree-sitter. | sync |
+| 3 | YouTube | URL pública + transcript | Videos del usuario o público con transcript disponible. Chunking respeta segmentos del transcript. | sync |
+| 4 | Instagram | OAuth Meta unified | Posts del usuario, captions + hashtags. OAuth compartido con Facebook (un solo consent screen). | sync |
+| 5 | Facebook | OAuth Meta unified | Posts del usuario y de Pages que administra. OAuth compartido con Instagram. | sync |
+| 6 | TikTok | OAuth Login Kit + ASR Whisper | Videos públicos del usuario. Caption + ASR del audio (Whisper API). **Pipeline async** por latencia 10-30s/video. Requiere TikTok for Developers approval (~2-4 semanas). | async |
 
 **Nota libre:** vive como acción secundaria del drop zone ("Escribir una nota"). No es un conector aparte.
 
-**Fuera del MVP (próximamente con voting):** Notion, Dropbox, OneDrive, Figma, Slack, Discord, Gmail, Calendar, Threads, Spotify Podcasts, crawl sitio completo, RSS/blog, WhatsApp, Linear, Airtable.
+**Diferidos a post-MVP** (ver `MEMORY_INGEST.md v0.2 §15`):
+
+- **Link suelto** — fetch de URLs públicas. Técnicamente simple (~30 LoC) pero priorizado bajo: el contenido del creator vive más en redes que en URLs sueltas. Reactivable fácilmente.
+- **Google Drive** — OAuth Google + DPA legal. Diferido hasta tener compliance bandwidth.
+- **MCP gateway (cliente)** — leer de Claude Desktop / Cursor / Gemini / Raycast. Diferido junto con la implementación del paquete `@chisu/memory-ingest`. El lado **servidor** del MCP (Foco expone Memoria a otras AIs) sigue en MVP — ver §3.2.
+- **LinkedIn** — API restrictiva, requiere LinkedIn Marketing Developer Platform application. Diferido.
+- **X.com** — API monetizada agresivamente desde 2023; ROI cuestionable para MVP. Diferido hasta evidencia de demanda usuario.
+
+**Fuera del roadmap (próximamente con voting):** Notion, Dropbox, OneDrive, Figma, Slack, Discord, Gmail, Calendar, Threads, Spotify Podcasts, crawl sitio completo, RSS/blog, WhatsApp, Linear, Airtable.
 
 ### 3.2 MCP Gateway — bi-direccional con control granular
 
 > **Ubicación en UI:** la **configuración** completa del gateway vive en la pantalla dedicada `settings-mcp` (§2 #14), dentro del grupo **Ajustes**. La Memoria (`memory`, §2 #13) sólo muestra un **widget-resumen compacto** con estado del gateway y CTA "Configurar → settings-mcp". Esta separación aplica la regla §1.6: configuración del sistema no se mezcla con contenido de contexto.
+
+> **Scope MVP (firmado v1.4 — 2026-04-23):** el **lado servidor** del MCP gateway (Foco expone su Memoria a otras AIs externas) sigue en MVP. El **lado cliente** (Foco importa contenido de Claude Desktop / Cursor / Gemini / Raycast) queda diferido a post-MVP junto con la implementación del paquete `@chisu/memory-ingest` (ver `MEMORY_INGEST.md §15`). En settings-mcp del MVP, las "Conexiones activas (Foco lee ↓)" muestran un estado vacío + nota "Próximamente"; las "Otras AIs leen ↑" funcionan completas.
 
 **Cliente MCP (Foco lee):**
 - Foco se conecta a servidores MCP del usuario (Claude Desktop local, Cursor workspace, ChatGPT export JSON, Gemini, Raycast, custom).
@@ -122,7 +131,7 @@ Los dos bloques están físicamente separados siguiendo §1.6 (contenido vs. con
 
 ### 3.5 Seguridad de ingesta (invariante del sistema)
 
-Toda entrada de contenido a la Memoria — venga del upload directo o de los 10 conectores restantes — pasa por un pipeline de seguridad obligatorio, documentado en `INGEST_SECURITY.md`. **El documento de seguridad es prerequisito técnico para escribir cualquier parser o `MemoryItem`**; no se empieza ingesta sin spec firmada.
+Toda entrada de contenido a la Memoria — venga del upload directo o de los 5 conectores MVP restantes (github, youtube, instagram, facebook, tiktok) — pasa por un pipeline de seguridad obligatorio, documentado en `INGEST_SECURITY.md`. **El documento de seguridad es prerequisito técnico para escribir cualquier parser o `MemoryItem`**; no se empieza ingesta sin spec firmada.
 
 **Invariantes duras (copiadas aquí para que el equipo técnico las vea sin navegar):**
 1. **Quarantine-first.** Todo archivo entra primero a bucket R2 de cuarentena. Solo pasa a main tras validación completa.
@@ -134,7 +143,7 @@ Toda entrada de contenido a la Memoria — venga del upload directo o de los 10 
 7. **URLs con SSRF defense**: rechazar IPs privadas / link-local.
 8. **Hash SHA-256** para dedup + detección de archivos conocidos maliciosos.
 9. **Audit log sincrónico** de cada ingest event. Si el log falla, la operación falla.
-10. **Aplica a conectores externos también** (Drive, GitHub, socials, MCP) — no solo al upload directo.
+10. **Aplica a conectores externos también** (GitHub, YouTube, IG, FB, TikTok) — no solo al upload directo.
 
 **Reflejo en UX:**
 - SCREEN 13 (Memoria): cada item muestra chip de verdict AV ("limpio") y metadata de hash + MIME real (colapsable).
