@@ -1,6 +1,6 @@
-# `MEMORY_INGEST.md` — Memoria pipeline para Foco (v0.2 firmable)
+# `MEMORY_INGEST.md` — Memoria pipeline para Foco (v0.3 firmable)
 
-**Estado**: borrador firmable v0.2 — 2026-04-23. Las 8 decisiones abiertas de §16 quedan firmadas en esta versión. Pendiente peer review cruzado + firma final de Jean.
+**Estado**: borrador firmable v0.3 — 2026-04-23. Incorpora las 4 correcciones del peer review cruzado (PII boundary, determinismo retrieval honesto, drift policy en `memory_user_stats`, embedding versioning). Pendiente firma final de Jean.
 
 **Scope**: contrato técnico del paquete `@chisu/memory-ingest` (a crear) que materializa la **Memoria** de Foco. Pipeline de ingesta (chunking + embedding + storage) + retrieval (búsqueda semántica) sobre 6 conectores MVP. Sin código hasta firma — este documento es el contrato firmable, paralelo a `LLM_CLIENT.md v1.1`, `UX_FROZEN.md v1.3`, `INGEST_SECURITY.md v1.0`, `PRODUCTION_READINESS.md v1.0`.
 
@@ -46,7 +46,7 @@ Los 10 invariantes del paquete. Cualquier cambio requiere **bump major + re-firm
 
 3. **Right to forget**. `DELETE` masivo por `user_id` debe completarse en <60s para 50k chunks. Borra row en pgvector + chunk_text + metadata + audit entry de la operación.
 
-4. **Sin PII fuerte en chunks**. El usuario es responsable de qué ingesta. El paquete NO escanea ni redacta PII automáticamente — eso es UX/legal layer arriba (warning UI antes de ingestar). Pero el paquete **tampoco persiste** identifiers automáticos del conector (ej. tags de personas en posts de IG/FB); solo el contenido textual.
+4. **PII es responsabilidad del caller, no garantía del paquete**. El paquete NO escanea ni redacta PII automáticamente. El usuario es responsable de qué ingesta y de evitar contenido sensible. El sistema **sí puede persistir PII indirecta** proveniente del contenido del usuario (menciones a terceros en captions de IG/FB, nombres en transcripts de TikTok/YouTube, emails en docs subidos, etc.). Este invariante es una **boundary de responsabilidad**, NO una garantía de compliance: la UX layer arriba (warning UI antes de ingestar, opt-in para sources sensibles) es responsable de evitar que PII no consentida entre. El paquete sí evita persistir identifiers **automáticos del conector** (header del JWT del OAuth de Drive/Meta, IDs internos del API, etc.) — solo el contenido textual del documento.
 
 5. **Embedding único**. Un solo provider en MVP (OpenAI text-embedding-3-small). Cambiar provider requiere migración de TODA la base vectorial (los embeddings no son comparables entre providers). Bump major + plan de migración firmado.
 
@@ -54,7 +54,7 @@ Los 10 invariantes del paquete. Cualquier cambio requiere **bump major + re-firm
 
 7. **Quotas hard-capped por plan**. Un usuario en plan Free no puede tener >100 chunks (ver §6). Intento de exceder → `quota_exhausted` error con userMessage que apunta al upgrade.
 
-8. **Retrieval determinista**. Mismo `(userId, query, k, filters)` produce los mismos topK chunks (modulo embeddings provider — que está pinned). Sin random sampling, sin temperature, sin reranker stochastic en MVP.
+8. **Retrieval estable y reproducible** (NO matemáticamente determinista). Mismo `(userId, query, k, filters)` produce los mismos topK chunks **mientras el índice no haya cambiado entre llamadas**. Importante: `ivfflat` es un algoritmo de búsqueda **aproximada** (ANN — approximate nearest neighbor); tras un rebuild del índice o cambio de `lists`, los topK pueden variar ligeramente para el mismo query. Lo que SÍ se garantiza por el paquete: sin random sampling explícito, sin temperature, sin reranker stochastic, sin shuffling. El algoritmo subyacente (ivfflat probabilities) introduce su propia variabilidad-bajo-rebuild, que es trade-off acceptable para escala >1M chunks. Si en post-MVP se requiere determinismo dura (ej. legal hold), migrar a `hnsw` con `ef_construction` fijo o vector index exhaustivo.
 
 9. **No conversaciones IA en Memoria**. Las salidas del Asistente, scripts generados, captions producidos NO entran a Memoria automáticamente. El usuario puede explícitamente "guardar a Memoria" un output, pero la default es no-persistir. (Coherente con `project_foco_mcp_bidireccional`: conversaciones IA no se re-exponen.)
 
@@ -77,7 +77,22 @@ interface MemoryItem {
   readonly chunkText: string;    // texto plano del chunk
   readonly chunkIndex: number;   // 0-based dentro del documento original
   readonly chunkTotal: number;   // total de chunks del mismo documento
-  readonly embedding: Float32Array; // 1536 dim, OpenAI text-embedding-3-small
+  readonly embedding: Float32Array;
+  /**
+   * Identifier of the embedding model that produced `embedding`.
+   * Pinned to `'text-embedding-3-small'` in MVP. Stored explicitly so
+   * post-MVP migrations (e.g. swap to `text-embedding-3-large` or a
+   * different provider) can coexist: retrieval queries filter by
+   * `embedding_model = currentModel` to avoid comparing vectors from
+   * incompatible spaces.
+   */
+  readonly embeddingModel: string;
+  /**
+   * Vector dimensionality. Stored alongside `embeddingModel` so a
+   * migration that produces shorter/longer vectors is detectable
+   * without parsing the model identifier. 1536 in MVP.
+   */
+  readonly embeddingDim: number;
   readonly metadata: ChunkMetadata;
   readonly createdAt: Date;
   readonly lastSeenAt: Date;     // updated en re-ingesta (idempotente)
@@ -266,10 +281,16 @@ Mismo modelo (`text-embedding-3-small`), single-input call. ~50-100ms p50.
 ### Step 2 — SQL vector search
 
 ```sql
+-- The embedding_model filter is critical post-migration: comparing
+-- vectors across different models produces meaningless cosine
+-- distances. In MVP only one model exists so the filter is no-op,
+-- but the query is shaped today so v0.4+ migrations don't have to
+-- rewrite call-sites.
 SELECT id, chunk_text, source, source_uri, metadata,
        1 - (embedding <=> $1) AS score
 FROM memory_item
 WHERE user_id = $2
+  AND embedding_model = $7  -- always passed by caller; default 'text-embedding-3-small' in MVP
   AND ($3::text[] IS NULL OR source = ANY($3))
   AND ($4::text[] IS NULL OR metadata->'tags' ?| $4)
   AND ($5::timestamptz IS NULL OR (metadata->>'publishedAt')::timestamptz >= $5)
@@ -308,6 +329,25 @@ Cualquier chunk con `score < minScore` (default 0.65) se descarta post-SQL. Si q
 **Decisión abierta**: ¿estos números son los firmables o ajustamos? Pendiente §16.
 
 `memory-ingest` consulta el `UserQuotaRepo` (mismo seam que `llm-client`) para resolver el plan + counts antes de cada ingesta. Counts viven en una tabla nueva `memory_user_stats` con `chunks_total`, `ingests_today`, `retrievals_today`, `asr_minutes_month`, refreshed en cada operación.
+
+### 6.1 · `memory_user_stats` drift policy
+
+`memory_user_stats` es **denormalizada pero source of truth para quotas en runtime**. Las decisiones de cuota se hacen contra esta tabla (no contra `SELECT count(*) FROM memory_item`); ese count() es O(N) y prohibitivo a escala.
+
+Drift es real (la tabla puede desincronizarse del estado autoritativo de `memory_item`). Política explícita:
+
+1. **Update transactional**: cada operación que cambia counts (ingest, delete, retrieval, embed-call, ASR-call) actualiza `memory_user_stats` **en la misma transacción Postgres** que la operación principal. Si la transacción falla, ambas se revierten — no hay path donde un chunk se inserte y el counter no se incremente, ni viceversa.
+
+2. **Daily/monthly resets**: cron diario (`memory.cron.reset_daily`) verifica `last_reset_day < CURRENT_DATE`; si cierto, resetea `ingests_today` y `retrievals_today` a 0, actualiza `last_reset_day`. Mismo patrón para `last_reset_month` con `embed_tokens_month` y `asr_minutes_month`.
+
+3. **Reconciliación periódica**: cron diario (`memory.cron.reconcile_stats`) compara, **por usuario activo en últimas 30 días**, el `chunks_total` denormalizado contra `SELECT count(*) FROM memory_item WHERE user_id = $1`. Drift detectado:
+   - Emite métrica `memory_stats_drift_total{metric, direction}` con `direction ∈ {high, low}` (denormalizado mayor o menor que real).
+   - Corrige el valor denormalizado al count autoritativo.
+   - Si drift > 5% del cap del plan del usuario, audit entry `memory.stats_drift_corrected` con `before/after` para forensics.
+
+4. **Retries en transacción**: las transacciones que fallan por contención (deadlock, serialization conflict) se reintentan con backoff exponencial 50-500ms, max 3 intentos. Tras 3 intentos fallidos → operación falla con `storage_unavailable`, NO se incrementa el counter. Eso garantiza la propiedad transaccional (#1).
+
+5. **Cuotas hard-capped son consultas, no escrituras**: el chequeo de "¿este usuario excedió cap del plan?" es un `SELECT` puro contra `memory_user_stats`. La operación que excede el cap NUNCA se ejecuta — el chequeo se hace pre-transaction. Esto evita la race "dos requests concurrentes pasan ambos el chequeo y cada uno incrementa, terminando 1 sobre el cap". El chequeo + increment es atómico vía `SELECT FOR UPDATE` o equivalent locking row-level.
 
 ---
 
@@ -349,6 +389,11 @@ CREATE TABLE memory_item (
   chunk_index     int NOT NULL,
   chunk_total     int NOT NULL,
   embedding       vector(1536) NOT NULL,
+  -- Embedding versioning (added v0.3 per peer review).
+  -- MVP pins to ('text-embedding-3-small', 1536). Post-MVP migrations
+  -- coexist by filtering retrieval queries by embedding_model.
+  embedding_model text NOT NULL DEFAULT 'text-embedding-3-small',
+  embedding_dim   int NOT NULL DEFAULT 1536,
   metadata        jsonb NOT NULL DEFAULT '{}',
   created_at      timestamptz NOT NULL DEFAULT NOW(),
   last_seen_at    timestamptz NOT NULL DEFAULT NOW(),
@@ -358,8 +403,11 @@ CREATE TABLE memory_item (
 
 CREATE INDEX memory_item_user_id_idx ON memory_item (user_id);
 CREATE INDEX memory_item_source_idx ON memory_item (user_id, source);
+-- Composite ANN index per (user, embedding_model) so retrieval over
+-- mixed-version corpora stays fast post-migration.
 CREATE INDEX memory_item_embedding_idx ON memory_item
-  USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
+  USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100)
+  WHERE embedding_model = 'text-embedding-3-small';
 
 CREATE TABLE memory_user_stats (
   user_id              text PRIMARY KEY,
@@ -607,6 +655,12 @@ Razones de diferimiento explícitas:
 - **LinkedIn**: API restrictiva, requiere LinkedIn Marketing Developer Platform application. Defer.
 - **X (Twitter)**: API monetizada agresivamente desde 2023. Costo + ROI cuestionable para MVP. Defer hasta evidencia de demanda usuario.
 
+**Migración de embedding model post-MVP** (habilitada por el versioning de v0.3):
+
+- Cuando se introduce un nuevo modelo (ej. `text-embedding-3-large` o un nuevo provider), el sistema soporta **coexistencia** durante la migración.
+- Plan: (a) cron job background re-embedea chunks viejos con el nuevo modelo, escribe rows nuevos con el nuevo `embedding_model` SIN borrar los viejos. (b) Retrieval queries filtran por `embedding_model = currentDefault`. (c) Una vez la cobertura del nuevo modelo llega a >99%, deprecation switch flip al nuevo modelo como default. (d) Cron de cleanup borra los chunks con el modelo viejo.
+- Sin downtime, sin "big bang" migration. Costo: storage temporal x2 durante la migración.
+
 **Mejoras de retrieval post-MVP**:
 
 - **Hybrid search** (BM25 + vector). Requiere extension `pg_trgm` o `pg_search`. Decisión abierta §16.
@@ -653,4 +707,9 @@ Las 8 decisiones que iter v0.1 dejó abiertas quedan resueltas en v0.2. Cualquie
 ## Changelog
 
 - **v0.1 — 2026-04-23**. Borrador inicial firmable. **Cambio de scope vs propuesta inicial**: los 6 conectores MVP son social-first (file + github + youtube + instagram + facebook + tiktok), reemplazando link + drive (diferidos a post-MVP). TikTok añade pipeline async + dependencia de Whisper API.
-- **v0.2 — 2026-04-23**. Las 8 decisiones abiertas de §16 firmadas en una sola sesión. Sin cambios estructurales del doc, solo materialización de defaults en decisiones explícitas. Pendiente peer review cruzado + firma final de Jean.
+- **v0.2 — 2026-04-23**. Las 8 decisiones abiertas de §16 firmadas en una sola sesión. Sin cambios estructurales del doc, solo materialización de defaults en decisiones explícitas.
+- **v0.3 — 2026-04-23**. Incorpora las 4 correcciones del peer review cruzado:
+  1. **§2 invariante 4**: reformulado de "Sin PII fuerte en chunks" → "PII es responsabilidad del caller, no garantía del paquete". Boundary de responsabilidad explícita; el sistema sí persistirá PII indirecta del contenido del usuario.
+  2. **§2 invariante 8**: reformulado de "Retrieval determinista" → "Retrieval estable y reproducible (no matemáticamente determinista)". `ivfflat` es ANN (approximate); el wording lo refleja.
+  3. **§6.1 (nuevo)**: drift policy explícita para `memory_user_stats`. Update transactional, daily/monthly resets, reconciliación periódica con audit, retries con backoff, atomic cap-check.
+  4. **§3.1 + §8 + §5**: embedding versioning. Nuevos campos `embeddingModel` + `embeddingDim` en `MemoryItem` y schema. Retrieval filtra por modelo. §15 documenta plan de migración futura coexistente. Pendiente firma final de Jean.
