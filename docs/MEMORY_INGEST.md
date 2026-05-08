@@ -1,6 +1,6 @@
-# `MEMORY_INGEST.md` — Memoria pipeline para Foco (v0.3 firmable)
+# `MEMORY_INGEST.md` — Memoria pipeline para Foco (v0.4 firmable)
 
-**Estado**: borrador firmable v0.3 — 2026-04-23. Incorpora las 4 correcciones del peer review cruzado (PII boundary, determinismo retrieval honesto, drift policy en `memory_user_stats`, embedding versioning). Pendiente firma final de Jean.
+**Estado**: borrador firmable v0.4 — 2026-04-23. Bump por consistencia con `SUPABASE_SCHEMA.md v0.2`: idempotency check del pipeline pasa de `content_hash` a `(source_uri, chunk_index)` para evitar colisión cross-document de chunks textualmente idénticos. Pendiente firma final de Jean.
 
 **Scope**: contrato técnico del paquete `@chisu/memory-ingest` (a crear) que materializa la **Memoria** de Foco. Pipeline de ingesta (chunking + embedding + storage) + retrieval (búsqueda semántica) sobre 6 conectores MVP. Sin código hasta firma — este documento es el contrato firmable, paralelo a `LLM_CLIENT.md v1.1`, `UX_FROZEN.md v1.3`, `INGEST_SECURITY.md v1.0`, `PRODUCTION_READINESS.md v1.0`.
 
@@ -50,7 +50,9 @@ Los 10 invariantes del paquete. Cualquier cambio requiere **bump major + re-firm
 
 5. **Embedding único**. Un solo provider en MVP (OpenAI text-embedding-3-small). Cambiar provider requiere migración de TODA la base vectorial (los embeddings no son comparables entre providers). Bump major + plan de migración firmado.
 
-6. **Idempotencia por content hash**. La misma fuente ingestada dos veces produce el mismo `(user_id, source_uri, content_hash) → mismo chunk_id`. No re-embedea, no duplica. El `content_hash` es SHA-256 del contenido normalizado (post-chunking, pre-embedding).
+6. **Idempotencia por posición de chunk en su documento**. La misma fuente ingestada dos veces produce el mismo `(user_id, source_uri, chunk_index) → mismo chunk_id`. No re-embedea, no duplica. El `content_hash` (SHA-256 del chunk_text normalizado) se almacena como **información secundaria** — útil para queries futuras de dedup cross-document — pero NO es la key de idempotency.
+
+   **Razón del fix v0.4** (peer review de `SUPABASE_SCHEMA.md`): el v0.3 usaba `content_hash` como key de idempotency, lo cual era buggy — dos documentos distintos pueden tener chunks textualmente idénticos (ej. `import { foo } from 'bar'` aparece en muchos archivos del mismo repo) y colisionaban al insertar. La fix correcta: idempotency es por la posición del chunk dentro de su documento (`source_uri + chunk_index`), no por el contenido textual.
 
 7. **Quotas hard-capped por plan**. Un usuario en plan Free no puede tener >100 chunks (ver §6). Intento de exceder → `quota_exhausted` error con userMessage que apunta al upgrade.
 
@@ -231,7 +233,13 @@ Override por conector documentado en §9 (ej. YouTube splits en boundaries de tr
 
 ### Step 5 — Idempotency check
 
-Para cada chunk: `SELECT id FROM memory_item WHERE user_id = $1 AND content_hash = $2`. Si existe, **update `last_seen_at`** y skip embedding (ahorra cost). Si no existe, sigue al step 6.
+Para cada chunk: `SELECT id FROM memory_item WHERE user_id = $1 AND source_uri = $2 AND chunk_index = $3`. Si existe, **update `last_seen_at`** + comparar `content_hash` para detectar si el contenido cambió:
+
+- **Hit + same content_hash** → skip embedding (ahorra cost), bump `last_seen_at`.
+- **Hit + different content_hash** → re-embed con el chunk nuevo + UPDATE `chunk_text`/`embedding`/`content_hash`/`last_seen_at`. Esto cubre el caso de re-ingesta donde el documento cambió pero chunk_index alineó (ej. Drive doc editado en la misma posición).
+- **No hit** → sigue al step 6 (insert nuevo).
+
+**Razón del fix v0.4** (peer review de `SUPABASE_SCHEMA.md v0.2`): el v0.3 chequeaba por `content_hash` directo, lo cual fallaba para chunks textualmente idénticos en documentos distintos (mismo `import` line en dos archivos). La fix usa la posición del chunk dentro de su documento como key — coherente con el `UNIQUE (user_id, source_uri, chunk_index)` del schema.
 
 ### Step 6 — Embed
 
@@ -247,11 +255,19 @@ Latency budget: 30s para batch de 100. Timeout → ingesta falla, rollback.
 ### Step 7 — Upsert + audit
 
 ```sql
-INSERT INTO memory_item (id, user_id, source, source_uri, ..., embedding, ...)
+INSERT INTO memory_item (id, user_id, source, source_uri, chunk_index, ..., embedding, ...)
   VALUES (...)
-  ON CONFLICT (user_id, content_hash) DO UPDATE SET last_seen_at = NOW()
+  ON CONFLICT (user_id, source_uri, chunk_index) DO UPDATE SET
+    chunk_text = EXCLUDED.chunk_text,
+    content_hash = EXCLUDED.content_hash,
+    embedding = EXCLUDED.embedding,
+    last_seen_at = NOW()
   RETURNING id;
 ```
+
+(v0.4: el `ON CONFLICT` target alineado con el `UNIQUE` constraint de
+`SUPABASE_SCHEMA.md v0.2 §4.7`. El UPDATE branch refresca el contenido si
+el chunk en la misma posición cambió — caso "doc editado en Drive".)
 
 Tras el upsert, audit entry:
 
@@ -398,7 +414,11 @@ CREATE TABLE memory_item (
   created_at      timestamptz NOT NULL DEFAULT NOW(),
   last_seen_at    timestamptz NOT NULL DEFAULT NOW(),
 
-  UNIQUE (user_id, content_hash)
+  -- Idempotency real: una posición de chunk única por documento del usuario.
+  -- Coherente con SUPABASE_SCHEMA.md v0.2 §4.7. El v0.3 usaba
+  -- UNIQUE (user_id, content_hash) — buggy, colisionaba para chunks
+  -- textualmente idénticos cross-document. Fix: la posición es la key.
+  UNIQUE (user_id, source_uri, chunk_index)
 );
 
 CREATE INDEX memory_item_user_id_idx ON memory_item (user_id);
@@ -708,6 +728,7 @@ Las 8 decisiones que iter v0.1 dejó abiertas quedan resueltas en v0.2. Cualquie
 
 - **v0.1 — 2026-04-23**. Borrador inicial firmable. **Cambio de scope vs propuesta inicial**: los 6 conectores MVP son social-first (file + github + youtube + instagram + facebook + tiktok), reemplazando link + drive (diferidos a post-MVP). TikTok añade pipeline async + dependencia de Whisper API.
 - **v0.2 — 2026-04-23**. Las 8 decisiones abiertas de §16 firmadas en una sola sesión. Sin cambios estructurales del doc, solo materialización de defaults en decisiones explícitas.
+- **v0.4 — 2026-04-23**. Fix de drift con `SUPABASE_SCHEMA.md v0.2` (peer review #1 de schema): idempotency check del pipeline pasa de `content_hash` a `(source_uri, chunk_index)` para evitar colisión cross-document de chunks textualmente idénticos. Cambios en §2 invariante 6, §4 step 5 (chequeo + branch para re-embed cuando contenido cambió en la misma posición), §4 step 7 (`ON CONFLICT` target alineado), §8 storage (`UNIQUE` constraint). El `content_hash` queda como columna informational con índice secundario, NO uniqueness key. Las semantics de idempotency mejoran — re-ingest de un documento editado en la misma posición ahora se detecta y refresca correctamente.
 - **v0.3 — 2026-04-23**. Incorpora las 4 correcciones del peer review cruzado:
   1. **§2 invariante 4**: reformulado de "Sin PII fuerte en chunks" → "PII es responsabilidad del caller, no garantía del paquete". Boundary de responsabilidad explícita; el sistema sí persistirá PII indirecta del contenido del usuario.
   2. **§2 invariante 8**: reformulado de "Retrieval determinista" → "Retrieval estable y reproducible (no matemáticamente determinista)". `ivfflat` es ANN (approximate); el wording lo refleja.
