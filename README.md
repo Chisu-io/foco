@@ -1,5 +1,5 @@
 # Foco
-
+Jean Rojas
 > AI-powered short-form video production. From recording to published in minutes.
 
 **Product**: [foco.chisu.io](https://foco.chisu.io)
